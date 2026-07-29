@@ -409,7 +409,8 @@ def handle_passthrough(dongle, mc, cfg, cloud):
     our_out = {}      # msg-id -> (command_word, timestamp) for polls WE injected
     cloud_cmd = {}    # msg-id -> (command_word, timestamp) for the cloud's own requests
     last_cloud = [0.0]   # timestamp of the last frame seen from the cloud
-    SETTLE = 3.0         # small delay after connect so we don't hit the first handshake
+    SETTLE = 5.0         # small delay after connect before we start polling
+    QUIET_GAP = 2.0      # treat the cloud as idle only after this much silence
 
     def dongle_send(data):
         with dongle_send_lock:
@@ -546,17 +547,24 @@ def handle_passthrough(dongle, mc, cfg, cloud):
             our_out[mid] = (word, time.time())
         dongle_send(_build(mid, payload))
 
+    def cloud_busy():
+        with state_lock:
+            pending = bool(cloud_cmd)
+        return pending or (time.time() - last_cloud[0] < QUIET_GAP)
+
     def injector():
         if cfg["active_poll"].strip().lower() != "true":
             return
-        if stop.wait(SETTLE):          # tiny delay so we skip only the first handshake
+        if stop.wait(SETTLE):
             return
-        print(time.strftime("%H:%M:%S"), "injector active (parallel polling)")
+        print(time.strftime("%H:%M:%S"), "injector active (fills cloud-idle gaps)")
         did_rated = False
         last_energy = 0.0
         try:
             while not stop.wait(cfg["poll_interval"]):
-                expire()               # free ids from lost/old requests
+                expire()
+                if cloud_busy():        # cloud has priority; poll only when it is idle
+                    continue
                 if not did_rated:
                     inject("QPIRI", QPIRI)
                     did_rated = True
