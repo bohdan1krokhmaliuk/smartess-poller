@@ -57,15 +57,23 @@ Any key can also be overridden by an env var, e.g. `SMARTESS_POLL_INTERVAL=5`.
 
 ## Two modes
 
-**Local-only (default, `cloud_host` empty).** We act as the sole (fake) cloud. The
-dongle is fully cut off from the internet; we drive the whole conversation. Most private,
-simplest, and the SmartESS phone app will **not** work (the dongle no longer reaches the
-real cloud).
+There is **one physical serial (RS485) port** on the inverter and the dongle is its only
+client, so only one "master" can drive it at a time — either the real cloud **or** us, not
+both. That gives two mutually exclusive modes:
 
-**Passthrough (`cloud_host` set).** We become a transparent proxy between the dongle and
-the real Eybond cloud, so the **SmartESS app keeps working**, while we poll in parallel and
-publish to MQTT. Set `cloud_host` to the cloud's numeric IP — the hostname is
-DNS-redirected to us, so resolve it externally:
+**`local`** — we act as the sole (fake) cloud and keep the dongle connected to us, polling
+the inverter every `poll_interval`. **Fast, steady 10s data 24/7**, fully private. The
+SmartESS phone app does **not** work (the dongle is cut off from the real cloud).
+
+**`mirror`** — a byte-exact transparent relay between the dongle and the real Eybond cloud.
+The **SmartESS app works fully** (viewing *and* changing settings). We only *listen* and
+publish the telemetry that flows: replies to the cloud's own polls plus the dongle's
+unsolicited `QPIGS` uploads. Data cadence is the cloud's — frequent while you're viewing in
+the app, roughly every couple of minutes when the app is closed (that is the dongle's own
+upload rhythm; we can't poll it faster without becoming the master, i.e. `local`).
+
+For `mirror`, set the cloud's numeric IP (the hostname is DNS-redirected to us, so resolve
+it externally):
 
 ```bash
 dig +short ess.eybond.com @8.8.8.8
@@ -73,21 +81,24 @@ dig +short ess.eybond.com @8.8.8.8
 
 ```ini
 [smartess]
+mode        = mirror
 cloud_host  = 47.83.160.214   # example — verify yours with the dig command above
 cloud_port  = 502
-active_poll = true            # also inject our own QPIGS/QMOD/QET polls
 ```
 
-With `active_poll = true` we inject our own read commands (using reserved message ids that
-avoid the cloud's) for a steady rate even when the app is closed, and additionally parse the
-replies the cloud/app requests. With `active_poll = false` we only passively parse whatever
-the cloud/app asks for (zero extra load on the inverter, but the data rate then depends on
-the app being open). If the cloud is unreachable, the poller falls back to local-only mode
-so data keeps flowing.
+### Switch modes live (no restart)
 
-> Note: passthrough adds a little extra RS485 traffic and shares one TCP link with the
-> cloud. It's designed to be safe (injected replies are stripped before reaching the cloud),
-> but if you don't need the app, local-only is the simplest choice.
+Publish `local` or `mirror` to `<topic>control/mode`; the poller drops the current session
+and the dongle reconnects in the new mode within seconds. The active mode is published
+(retained) to `<topic>mode_active`, so a dashboard button can both set and reflect it.
+
+```bash
+mosquitto_pub -h 127.0.0.1 -t smartess/control/mode -m local    # fast logging
+mosquitto_pub -h 127.0.0.1 -t smartess/control/mode -m mirror   # use the app
+```
+
+If the cloud is unreachable in `mirror`, the poller falls back to serving locally so data
+keeps flowing.
 
 ## Redirect the dongle to this machine
 
