@@ -31,6 +31,7 @@ import json
 import os
 import socket
 import sys
+import threading
 import time
 
 try:
@@ -51,6 +52,13 @@ DEFAULTS = {
     "topic":         "smartess/",
     "poll_interval": "10",   # seconds between polls; 5-10 is safe, do not go below 3
     "sock_timeout":  "8",
+    # Passthrough mode: if cloud_host is set, relay the dongle <-> real Eybond cloud
+    # transparently (the SmartESS app keeps working) AND poll in parallel for MQTT.
+    # If empty, we act as the sole (fake) cloud. Use the cloud's real IP here, since
+    # the hostname is DNS-redirected to us:  dig +short ess.eybond.com @8.8.8.8
+    "cloud_host":    "",
+    "cloud_port":    "502",
+    "active_poll":   "true",  # in passthrough, also inject our own QPIGS/QMOD/QET polls
 }
 
 
@@ -71,6 +79,7 @@ def load_config():
             cfg[key] = env
     cfg["listen_port"] = int(cfg["listen_port"])
     cfg["mqtt_port"] = int(cfg["mqtt_port"])
+    cfg["cloud_port"] = int(cfg["cloud_port"])
     cfg["poll_interval"] = float(cfg["poll_interval"])
     cfg["sock_timeout"] = float(cfg["sock_timeout"])
     return cfg
@@ -175,7 +184,8 @@ class FrameReader:
         self.sock = sock
         self.buf = b""
 
-    def read(self):
+    def read_raw(self):
+        """Return the next complete frame as raw bytes, or None on EOF."""
         while True:
             # resync to the 0x5E start byte
             while self.buf and self.buf[0] != 0x5E:
@@ -186,11 +196,15 @@ class FrameReader:
                 if len(self.buf) >= total:
                     frame = self.buf[:total]
                     self.buf = self.buf[total:]
-                    return frame[1], frame[6:]
+                    return frame
             data = self.sock.recv(4096)
             if not data:
                 return None
             self.buf += data
+
+    def read(self):
+        raw = self.read_raw()
+        return None if raw is None else (raw[1], raw[6:])
 
 
 def request(sock, reader, payload):
@@ -294,8 +308,40 @@ def publish_qet(mc, topic, text):
     mc.publish(topic + "energy_total_kwh", round(wh / 1000.0, 3), retain=True)
 
 
+def cmd_word(payload):
+    """Extract the Voltronic command word (e.g. 'QPIGS') from an FF04 payload."""
+    if len(payload) < 3 or payload[0:2] != b"\xff\x04":
+        return None
+    out = []
+    for b in payload[2:]:
+        if 65 <= b <= 90 or 48 <= b <= 57:   # A-Z 0-9
+            out.append(chr(b))
+        else:
+            break
+    return "".join(out) or None
+
+
+def dispatch_reply(mc, topic, word, payload):
+    """Parse a Voltronic reply for a known command word and publish to MQTT."""
+    txt = voltronic_text(payload)
+    if txt is None:
+        return
+    if word == "QPIGS" and txt[:1].isdigit():
+        publish_qpigs(mc, topic, txt)
+    elif word == "QMOD":
+        mc.publish(topic + "mode", txt, retain=True)
+        mc.publish(topic + "mode_name", MODE_NAMES.get(txt, txt), retain=True)
+    elif word == "QET":
+        publish_qet(mc, topic, txt)
+    elif word == "QPIRI" and txt[:1].isdigit():
+        publish_qpiri(mc, topic, txt)
+    elif word == "QPIWS":
+        publish_qpiws(mc, topic, txt)
+
+
 # ------------------------------------------------------------------------- session
-def handle(sock, mc, cfg):
+def handle_fakeclient(sock, mc, cfg):
+    """Act as the sole (fake) cloud: we drive the whole conversation ourselves."""
     topic = cfg["topic"]
     sock.settimeout(cfg["sock_timeout"])
     reader = FrameReader(sock)
@@ -353,6 +399,114 @@ def handle(sock, mc, cfg):
         time.sleep(cfg["poll_interval"])
 
 
+def handle_passthrough(dongle, mc, cfg, cloud):
+    """Transparently relay dongle <-> real Eybond cloud (the SmartESS app keeps
+    working), while injecting our own polls and parsing telemetry into MQTT."""
+    topic = cfg["topic"]
+    stop = threading.Event()
+    state_lock = threading.Lock()
+    dongle_send_lock = threading.Lock()
+    our_out = {}      # msg-id -> (command_word, timestamp) for polls WE injected
+    cloud_cmd = {}    # msg-id -> (command_word, timestamp) for the cloud's own requests
+
+    def dongle_send(frame):
+        with dongle_send_lock:
+            dongle.sendall(frame)
+
+    def pump_cloud_to_dongle():
+        reader = FrameReader(cloud)
+        try:
+            while not stop.is_set():
+                raw = reader.read_raw()
+                if raw is None:
+                    break
+                word = cmd_word(raw[6:])
+                if word:
+                    with state_lock:
+                        cloud_cmd[raw[1]] = (word, time.time())
+                dongle_send(raw)
+        except OSError:
+            pass
+        finally:
+            stop.set()
+
+    def pump_dongle_to_cloud():
+        reader = FrameReader(dongle)
+        try:
+            while not stop.is_set():
+                raw = reader.read_raw()
+                if raw is None:
+                    break
+                mid, payload = raw[1], raw[6:]
+                with state_lock:
+                    ours = our_out.pop(mid, None)
+                if ours:                       # reply to OUR injected poll
+                    dispatch_reply(mc, topic, ours[0], payload)
+                    continue                   # do NOT forward it to the cloud
+                try:
+                    cloud.sendall(raw)         # forward the real reply unchanged
+                except OSError:
+                    break
+                with state_lock:               # bonus: parse the cloud's own reply too
+                    cc = cloud_cmd.pop(mid, None)
+                if cc:
+                    dispatch_reply(mc, topic, cc[0], payload)
+        except OSError:
+            pass
+        finally:
+            stop.set()
+
+    def pick_id():
+        with state_lock:
+            used = set(cloud_cmd) | set(our_out)
+        for cand in list(range(0xE0, 0x100)) + list(range(0x00, 0xE0)):
+            if cand not in used:
+                return cand
+        return None
+
+    def expire():
+        now = time.time()
+        with state_lock:
+            for store in (our_out, cloud_cmd):
+                for k in [k for k, v in store.items() if now - v[1] > 15]:
+                    store.pop(k, None)
+
+    def inject(word, payload):
+        mid = pick_id()
+        if mid is None:
+            return
+        with state_lock:
+            our_out[mid] = (word, time.time())
+        dongle_send(_build(mid, payload))
+
+    def injector():
+        if cfg["active_poll"].strip().lower() != "true":
+            return
+        try:
+            inject("QPIRI", QPIRI)             # static info once
+            last_energy = 0.0
+            while not stop.wait(cfg["poll_interval"]):
+                expire()
+                inject("QPIGS", QPIGS)
+                inject("QMOD", QMOD)
+                if time.time() - last_energy > 60:
+                    inject("QET", QET)
+                    last_energy = time.time()
+        except OSError:
+            stop.set()
+
+    threads = [threading.Thread(target=t, daemon=True)
+               for t in (pump_cloud_to_dongle, pump_dongle_to_cloud, injector)]
+    for t in threads:
+        t.start()
+    stop.wait()
+    for s in (dongle, cloud):
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
 def main():
     cfg = load_config()
 
@@ -369,18 +523,35 @@ def main():
     srv.listen(1)
     print("Listening on %s:%d — waiting for the dongle..." % (cfg["listen_host"], cfg["listen_port"]))
 
+    mode = ("passthrough -> %s:%d" % (cfg["cloud_host"], cfg["cloud_port"])
+            if cfg["cloud_host"] else "fakeclient (local only)")
+    print("Mode:", mode)
+
     while True:
         conn, addr = srv.accept()
         print("Dongle connected:", addr)
+        cloud = None
         try:
-            handle(conn, mc, cfg)
+            if cfg["cloud_host"]:
+                try:
+                    cloud = socket.create_connection(
+                        (cfg["cloud_host"], cfg["cloud_port"]), timeout=10)
+                    print("Relaying to cloud %s:%d" % (cfg["cloud_host"], cfg["cloud_port"]))
+                    handle_passthrough(conn, mc, cfg, cloud)
+                except OSError as e:
+                    print("Cloud connect failed (%s) -> serving locally" % e)
+                    handle_fakeclient(conn, mc, cfg)
+            else:
+                handle_fakeclient(conn, mc, cfg)
         except Exception as e:
             print("Session ended:", e)
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            for s in (conn, cloud):
+                if s is not None:
+                    try:
+                        s.close()
+                    except OSError:
+                        pass
 
 
 if __name__ == "__main__":

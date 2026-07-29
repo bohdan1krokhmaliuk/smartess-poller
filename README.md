@@ -55,6 +55,40 @@ poll_interval = 10           # seconds between polls (5-10 safe; do not go below
 
 Any key can also be overridden by an env var, e.g. `SMARTESS_POLL_INTERVAL=5`.
 
+## Two modes
+
+**Local-only (default, `cloud_host` empty).** We act as the sole (fake) cloud. The
+dongle is fully cut off from the internet; we drive the whole conversation. Most private,
+simplest, and the SmartESS phone app will **not** work (the dongle no longer reaches the
+real cloud).
+
+**Passthrough (`cloud_host` set).** We become a transparent proxy between the dongle and
+the real Eybond cloud, so the **SmartESS app keeps working**, while we poll in parallel and
+publish to MQTT. Set `cloud_host` to the cloud's numeric IP — the hostname is
+DNS-redirected to us, so resolve it externally:
+
+```bash
+dig +short ess.eybond.com @8.8.8.8
+```
+
+```ini
+[smartess]
+cloud_host  = 47.83.160.214   # example — verify yours with the dig command above
+cloud_port  = 502
+active_poll = true            # also inject our own QPIGS/QMOD/QET polls
+```
+
+With `active_poll = true` we inject our own read commands (using reserved message ids that
+avoid the cloud's) for a steady rate even when the app is closed, and additionally parse the
+replies the cloud/app requests. With `active_poll = false` we only passively parse whatever
+the cloud/app asks for (zero extra load on the inverter, but the data rate then depends on
+the app being open). If the cloud is unreachable, the poller falls back to local-only mode
+so data keeps flowing.
+
+> Note: passthrough adds a little extra RS485 traffic and shares one TCP link with the
+> cloud. It's designed to be safe (injected replies are stripped before reaching the cloud),
+> but if you don't need the app, local-only is the simplest choice.
+
 ## Redirect the dongle to this machine
 
 The dongle connects out to **`ess.eybond.com:502`**. Point that hostname at this box.
