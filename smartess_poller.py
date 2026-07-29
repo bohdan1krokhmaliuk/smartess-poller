@@ -408,49 +408,63 @@ def handle_passthrough(dongle, mc, cfg, cloud):
     dongle_send_lock = threading.Lock()
     our_out = {}      # msg-id -> (command_word, timestamp) for polls WE injected
     cloud_cmd = {}    # msg-id -> (command_word, timestamp) for the cloud's own requests
+    last_cloud = [0.0]   # timestamp of the last frame seen from the cloud
+    SETTLE = 25.0        # seconds to wait after connect before injecting anything
+    QUIET_GAP = 4.0      # only inject when the cloud link has been idle this long
 
-    def dongle_send(frame):
+    def dongle_send(data):
         with dongle_send_lock:
-            dongle.sendall(frame)
+            dongle.sendall(data)
 
-    def pump_cloud_to_dongle():
-        reader = FrameReader(cloud)
+    def extract_frames(holder, data):
+        """Append to a rolling buffer and yield complete 5E frames (tap only —
+        never used to rebuild the forwarded stream)."""
+        holder[0] += data
+        buf = holder[0]
+        i, n = 0, len(buf)
+        while True:
+            while i < n and buf[i] != 0x5E:
+                i += 1
+            if n - i < 6:
+                break
+            total = 6 + int.from_bytes(buf[i + 4:i + 6], "big")
+            if n - i < total:
+                break
+            yield buf[i:i + total]
+            i += total
+        holder[0] = buf[i:]
+
+    def on_cloud_frame(raw):
+        last_cloud[0] = time.time()
+        word = cmd_word(raw[6:])
+        if word:
+            with state_lock:
+                cloud_cmd[raw[1]] = (word, time.time())
+
+    def on_dongle_frame(raw):
+        with state_lock:
+            hit = our_out.pop(raw[1], None) or cloud_cmd.pop(raw[1], None)
+        if hit:
+            dispatch_reply(mc, topic, hit[0], raw[6:])
+
+    def relay(src, dst, on_frame):
+        """Forward bytes src->dst VERBATIM (byte-exact, like socat); feed a copy
+        to on_frame for MQTT parsing. Parsing can never corrupt the relay."""
+        holder = [b""]
         try:
             while not stop.is_set():
-                raw = reader.read_raw()
-                if raw is None:
+                data = src.recv(4096)
+                if not data:
                     break
-                word = cmd_word(raw[6:])
-                if word:
-                    with state_lock:
-                        cloud_cmd[raw[1]] = (word, time.time())
-                dongle_send(raw)
-        except OSError:
-            pass
-        finally:
-            stop.set()
-
-    def pump_dongle_to_cloud():
-        reader = FrameReader(dongle)
-        try:
-            while not stop.is_set():
-                raw = reader.read_raw()
-                if raw is None:
-                    break
-                mid, payload = raw[1], raw[6:]
-                with state_lock:
-                    ours = our_out.pop(mid, None)
-                if ours:                       # reply to OUR injected poll
-                    dispatch_reply(mc, topic, ours[0], payload)
-                    continue                   # do NOT forward it to the cloud
-                try:
-                    cloud.sendall(raw)         # forward the real reply unchanged
-                except OSError:
-                    break
-                with state_lock:               # bonus: parse the cloud's own reply too
-                    cc = cloud_cmd.pop(mid, None)
-                if cc:
-                    dispatch_reply(mc, topic, cc[0], payload)
+                if dst is dongle:
+                    dongle_send(data)
+                else:
+                    dst.sendall(data)
+                for raw in extract_frames(holder, data):
+                    try:
+                        on_frame(raw)
+                    except Exception:
+                        pass
         except OSError:
             pass
         finally:
@@ -479,14 +493,26 @@ def handle_passthrough(dongle, mc, cfg, cloud):
             our_out[mid] = (word, time.time())
         dongle_send(_build(mid, payload))
 
+    def cloud_busy():
+        with state_lock:
+            pending = bool(cloud_cmd)
+        return pending or (time.time() - last_cloud[0] < QUIET_GAP)
+
     def injector():
         if cfg["active_poll"].strip().lower() != "true":
             return
+        if stop.wait(SETTLE):          # let the cloud finish its handshake first
+            return
+        did_rated = False
+        last_energy = 0.0
         try:
-            inject("QPIRI", QPIRI)             # static info once
-            last_energy = 0.0
             while not stop.wait(cfg["poll_interval"]):
                 expire()
+                if cloud_busy():       # never inject while the cloud is mid-exchange
+                    continue
+                if not did_rated:
+                    inject("QPIRI", QPIRI)
+                    did_rated = True
                 inject("QPIGS", QPIGS)
                 inject("QMOD", QMOD)
                 if time.time() - last_energy > 60:
@@ -495,8 +521,11 @@ def handle_passthrough(dongle, mc, cfg, cloud):
         except OSError:
             stop.set()
 
-    threads = [threading.Thread(target=t, daemon=True)
-               for t in (pump_cloud_to_dongle, pump_dongle_to_cloud, injector)]
+    threads = [
+        threading.Thread(target=relay, args=(cloud, dongle, on_cloud_frame), daemon=True),
+        threading.Thread(target=relay, args=(dongle, cloud, on_dongle_frame), daemon=True),
+        threading.Thread(target=injector, daemon=True),
+    ]
     for t in threads:
         t.start()
     stop.wait()
