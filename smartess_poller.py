@@ -322,6 +322,14 @@ def cmd_word(payload):
     return "".join(out) or None
 
 
+def looks_like_qpigs(text):
+    """Heuristic to recognise an unsolicited QPIGS reply: 21 space-separated
+    tokens, first is numeric, and token[16] is the 8-bit device-status field."""
+    toks = text.split()
+    return (len(toks) >= 21 and toks[0][:1].isdigit()
+            and len(toks[16]) == 8 and set(toks[16]) <= {"0", "1"})
+
+
 def dispatch_reply(mc, topic, word, payload):
     """Parse a Voltronic reply for a known command word and publish to MQTT."""
     txt = voltronic_text(payload)
@@ -497,14 +505,20 @@ def handle_passthrough(dongle, mc, cfg, cloud):
                     p = f[6:]
                     with state_lock:
                         w = cloud_cmd.pop(f[1], None)
+                    t = voltronic_text(p)
                     if LOG_CLOUD:
-                        t = voltronic_text(p)
                         print(time.strftime("%H:%M:%S"), "dongle->cloud",
                               (w[0] if w else "unsolicited"),
                               t if t is not None else p.hex())
                     if w:
                         try:
                             dispatch_reply(mc, topic, w[0], p)
+                        except Exception:
+                            pass
+                    elif t and looks_like_qpigs(t):
+                        # dongle pushed QPIGS on its own (no cloud request) — capture it
+                        try:
+                            publish_qpigs(mc, topic, t)
                         except Exception:
                             pass
         except OSError:
