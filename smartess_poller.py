@@ -440,11 +440,65 @@ def handle_passthrough(dongle, mc, cfg, cloud):
             with state_lock:
                 cloud_cmd[raw[1]] = (word, time.time())
 
-    def on_dongle_frame(raw):
-        with state_lock:
-            hit = our_out.pop(raw[1], None) or cloud_cmd.pop(raw[1], None)
-        if hit:
-            dispatch_reply(mc, topic, hit[0], raw[6:])
+    def split_out(buf):
+        """Split dongle bytes: forward everything to the cloud EXCEPT frames whose
+        msg-id is one of our injected polls (stripped so the cloud never sees
+        them). Returns (bytes_to_forward, leftover, our_frames, cloud_frames)."""
+        out = bytearray()
+        ours, clouds = [], []
+        i, n = 0, len(buf)
+        while i < n:
+            if buf[i] != 0x5E:
+                out.append(buf[i])
+                i += 1
+                continue
+            if n - i < 6:
+                break
+            total = 6 + int.from_bytes(buf[i + 4:i + 6], "big")
+            if n - i < total:
+                break
+            frame = bytes(buf[i:i + total])
+            with state_lock:
+                mine = frame[1] in our_out
+            if mine:
+                ours.append(frame)          # strip — do not forward to the cloud
+            else:
+                out += frame                # cloud's own traffic, byte-exact
+                clouds.append(frame)
+            i += total
+        return bytes(out), buf[i:], ours, clouds
+
+    def relay_dongle_to_cloud():
+        buf = b""
+        try:
+            while not stop.is_set():
+                data = dongle.recv(4096)
+                if not data:
+                    break
+                buf += data
+                out, buf, ours, clouds = split_out(buf)
+                if out:
+                    cloud.sendall(out)
+                for f in ours:
+                    with state_lock:
+                        w = our_out.pop(f[1], None)
+                    if w:
+                        try:
+                            dispatch_reply(mc, topic, w[0], f[6:])
+                        except Exception:
+                            pass
+                for f in clouds:
+                    with state_lock:
+                        w = cloud_cmd.pop(f[1], None)
+                    if w:
+                        try:
+                            dispatch_reply(mc, topic, w[0], f[6:])
+                        except Exception:
+                            pass
+        except OSError:
+            pass
+        finally:
+            stop.set()
 
     def relay(src, dst, on_frame):
         """Forward bytes src->dst VERBATIM (byte-exact, like socat); feed a copy
@@ -516,7 +570,7 @@ def handle_passthrough(dongle, mc, cfg, cloud):
 
     threads = [
         threading.Thread(target=relay, args=(cloud, dongle, on_cloud_frame), daemon=True),
-        threading.Thread(target=relay, args=(dongle, cloud, on_dongle_frame), daemon=True),
+        threading.Thread(target=relay_dongle_to_cloud, daemon=True),
         threading.Thread(target=injector, daemon=True),
     ]
     for t in threads:
