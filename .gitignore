@@ -1,0 +1,18 @@
+# local config (may contain MQTT credentials)
+config.ini
+
+# captures / logs
+*.log
+relay.log
+captures/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store

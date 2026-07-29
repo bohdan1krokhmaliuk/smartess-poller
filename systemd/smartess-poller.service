@@ -1,0 +1,18 @@
+[Unit]
+Description=SmartESS Voltronic Poller (Eybond dongle -> MQTT)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace /path/to with the absolute path to the cloned repo, e.g. /home/pi/smartess-poller
+WorkingDirectory=/path/to
+ExecStart=/usr/bin/python3 /path/to/smartess_poller.py
+Restart=always
+RestartSec=10
+# Root is required to bind privileged port 502. If you used setcap or a high
+# port instead, change User= to an unprivileged account.
+User=root
+
+[Install]
+WantedBy=multi-user.target
