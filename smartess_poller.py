@@ -444,7 +444,7 @@ def handle_passthrough(dongle, mc, cfg, cloud):
         with state_lock:
             cloud_cmd[raw[1]] = (label, time.time())
         if LOG_CLOUD:
-            print(time.strftime("%H:%M:%S"), "cloud->", label)
+            print(time.strftime("%H:%M:%S"), "cloud->dongle", label)
 
     def split_out(buf):
         """Split dongle bytes: forward everything to the cloud EXCEPT frames whose
@@ -494,16 +494,17 @@ def handle_passthrough(dongle, mc, cfg, cloud):
                         except Exception:
                             pass
                 for f in clouds:
+                    p = f[6:]
                     with state_lock:
                         w = cloud_cmd.pop(f[1], None)
+                    if LOG_CLOUD:
+                        t = voltronic_text(p)
+                        print(time.strftime("%H:%M:%S"), "dongle->cloud",
+                              (w[0] if w else "unsolicited"),
+                              t if t is not None else p.hex())
                     if w:
-                        if LOG_CLOUD:
-                            p = f[6:]
-                            t = voltronic_text(p)
-                            print(time.strftime("%H:%M:%S"), "cloud<-", w[0],
-                                  t if t is not None else p.hex())
                         try:
-                            dispatch_reply(mc, topic, w[0], f[6:])
+                            dispatch_reply(mc, topic, w[0], p)
                         except Exception:
                             pass
         except OSError:
