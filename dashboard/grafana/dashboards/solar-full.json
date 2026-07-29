@@ -1,0 +1,243 @@
+{
+  "uid": "smartess-full",
+  "title": "Inverter — Full",
+  "tags": ["smartess"],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    { "id": 100, "type": "row", "title": "⚡ Now", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+
+    { "id": 1, "type": "gauge", "title": "Battery SoC", "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 20 }, { "color": "green", "value": 50 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_capacity", "refId": "A" } ] },
+
+    { "id": 2, "type": "gauge", "title": "Load %", "gridPos": { "h": 6, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 70 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_output_load_percent", "refId": "A" } ] },
+
+    { "id": 3, "type": "stat", "title": "Battery V", "gridPos": { "h": 3, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "volt", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_voltage", "refId": "A" } ] },
+
+    { "id": 4, "type": "stat", "title": "Load", "gridPos": { "h": 3, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_ac_output_active_power", "refId": "A" } ] },
+
+    { "id": 5, "type": "stat", "title": "PV power", "gridPos": { "h": 3, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_pv_input_voltage * inverter_pv_input_current", "refId": "A" } ] },
+
+    { "id": 6, "type": "stat", "title": "Grid V", "gridPos": { "h": 3, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "volt", "decimals": 1, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 50 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_grid_voltage", "refId": "A" } ] },
+
+    { "id": 7, "type": "stat", "title": "Heatsink temp", "gridPos": { "h": 3, "w": 4, "x": 8, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "celsius", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 55 }, { "color": "red", "value": 70 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_heatsink_temperature", "refId": "A" } ] },
+
+    { "id": 8, "type": "stat", "title": "Mode", "gridPos": { "h": 3, "w": 4, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "mappings": [ { "type": "value", "options": { "0": { "text": "PowerOn", "color": "blue" }, "1": { "text": "Standby", "color": "yellow" }, "2": { "text": "Line", "color": "green" }, "3": { "text": "Battery", "color": "blue" }, "4": { "text": "Fault", "color": "red" }, "5": { "text": "PowerSaving", "color": "yellow" } } } ] }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "mode_value", "refId": "A" } ] },
+
+    { "id": 9, "type": "stat", "title": "Status", "gridPos": { "h": 3, "w": 4, "x": 16, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "mappings": [ { "type": "value", "options": { "0": { "text": "OK", "color": "green" }, "1": { "text": "FAULT", "color": "red" } } } ] }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "fault_value", "refId": "A" } ] },
+
+    { "id": 10, "type": "stat", "title": "Peak load (24h)", "gridPos": { "h": 3, "w": 4, "x": 20, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max_over_time(inverter_ac_output_active_power[24h])", "refId": "A" } ] },
+
+    { "id": 101, "type": "row", "title": "🔋 Energy (today / month)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 } },
+
+    { "id": 11, "type": "stat", "title": "Generated today", "gridPos": { "h": 4, "w": 4, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "increase(energy_value[24h])", "refId": "A" } ] },
+
+    { "id": 12, "type": "stat", "title": "Generated (30d)", "gridPos": { "h": 4, "w": 4, "x": 4, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 1 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "increase(energy_value[30d])", "refId": "A" } ] },
+
+    { "id": 13, "type": "stat", "title": "Consumed today ≈", "gridPos": { "h": 4, "w": 4, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "avg_over_time(inverter_ac_output_active_power[24h]) * 24 / 1000", "refId": "A" } ] },
+
+    { "id": 14, "type": "stat", "title": "Consumed 30d ≈", "gridPos": { "h": 4, "w": 4, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "avg_over_time(inverter_ac_output_active_power[30d]) * 720 / 1000", "refId": "A" } ] },
+
+    { "id": 15, "type": "stat", "title": "From battery today ≈", "gridPos": { "h": 4, "w": 4, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "avg_over_time((inverter_battery_voltage * inverter_battery_discharge_current)[24h:2m]) * 24 / 1000", "refId": "A" } ] },
+
+    { "id": 16, "type": "stat", "title": "Self-sufficiency (24h) ≈", "gridPos": { "h": 4, "w": 4, "x": 20, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 0, "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "clamp_max(100 * avg_over_time((inverter_pv_input_voltage * inverter_pv_input_current)[24h:2m]) / avg_over_time(inverter_ac_output_active_power[24h]), 100)", "refId": "A" } ] },
+
+    { "id": 102, "type": "row", "title": "📊 Power by source", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 } },
+
+    { "id": 17, "type": "timeseries", "title": "Sources → load (W)", "gridPos": { "h": 8, "w": 16, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt", "custom": { "drawStyle": "line", "fillOpacity": 30, "stacking": { "mode": "normal", "group": "A" }, "showPoints": "never", "lineWidth": 1 } }, "overrides": [ { "matcher": { "id": "byName", "options": "load" }, "properties": [ { "id": "custom.stacking", "value": { "mode": "none" } }, { "id": "custom.fillOpacity", "value": 0 }, { "id": "custom.lineWidth", "value": 2 }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "white" } } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_pv_input_voltage * inverter_pv_input_current", "legendFormat": "solar", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_voltage * inverter_battery_discharge_current", "legendFormat": "battery", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "clamp_min(inverter_ac_output_active_power + (inverter_battery_voltage * inverter_battery_charge_current) - (inverter_pv_input_voltage * inverter_pv_input_current) - (inverter_battery_voltage * inverter_battery_discharge_current), 0)", "legendFormat": "grid", "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_ac_output_active_power", "legendFormat": "load", "refId": "D" }
+      ] },
+
+    { "id": 18, "type": "timeseries", "title": "Self-sufficiency %", "gridPos": { "h": 8, "w": 8, "x": 16, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 20, "showPoints": "never", "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "clamp_max(100 * (inverter_pv_input_voltage * inverter_pv_input_current) / inverter_ac_output_active_power, 100)", "legendFormat": "PV coverage", "refId": "A" } ] },
+
+    { "id": 103, "type": "row", "title": "🔌 Load & power", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 } },
+
+    { "id": 19, "type": "timeseries", "title": "Output power", "gridPos": { "h": 7, "w": 12, "x": 0, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt", "custom": { "drawStyle": "line", "fillOpacity": 12, "showPoints": "never", "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_ac_output_active_power", "legendFormat": "active (W)", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_ac_output_apparent_power", "legendFormat": "apparent (VA)", "refId": "B" }
+      ] },
+
+    { "id": 20, "type": "timeseries", "title": "Load %", "gridPos": { "h": 7, "w": 12, "x": 12, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 20, "showPoints": "never", "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_output_load_percent", "legendFormat": "load %", "refId": "A" } ] },
+
+    { "id": 104, "type": "row", "title": "🔋 Battery", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 } },
+
+    { "id": 21, "type": "timeseries", "title": "SoC & voltage", "gridPos": { "h": 7, "w": 8, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 8, "showPoints": "never", "lineWidth": 1 } }, "overrides": [ { "matcher": { "id": "byName", "options": "voltage (V)" }, "properties": [ { "id": "unit", "value": "volt" } ] }, { "matcher": { "id": "byName", "options": "SoC (%)" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "custom.axisPlacement", "value": "right" } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_voltage", "legendFormat": "voltage (V)", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_capacity", "legendFormat": "SoC (%)", "refId": "B" }
+      ] },
+
+    { "id": 22, "type": "timeseries", "title": "Charge / discharge current", "gridPos": { "h": 7, "w": 8, "x": 8, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "amp", "custom": { "drawStyle": "line", "fillOpacity": 15, "showPoints": "never", "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_charge_current", "legendFormat": "charge (A)", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_discharge_current", "legendFormat": "discharge (A)", "refId": "B" }
+      ] },
+
+    { "id": 23, "type": "timeseries", "title": "Net battery power (+charge / −discharge)", "gridPos": { "h": 7, "w": 8, "x": 16, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt", "custom": { "drawStyle": "line", "fillOpacity": 20, "showPoints": "never", "lineWidth": 1, "gradientMode": "scheme" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_battery_voltage * (inverter_battery_charge_current - inverter_battery_discharge_current)", "legendFormat": "net (W)", "refId": "A" } ] },
+
+    { "id": 105, "type": "row", "title": "☀️ Solar", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 } },
+
+    { "id": 24, "type": "timeseries", "title": "PV voltage / current / power", "gridPos": { "h": 7, "w": 16, "x": 0, "y": 38 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never", "lineWidth": 1 } }, "overrides": [ { "matcher": { "id": "byName", "options": "power (W)" }, "properties": [ { "id": "unit", "value": "watt" }, { "id": "custom.axisPlacement", "value": "right" } ] }, { "matcher": { "id": "byName", "options": "voltage (V)" }, "properties": [ { "id": "unit", "value": "volt" } ] }, { "matcher": { "id": "byName", "options": "current (A)" }, "properties": [ { "id": "unit", "value": "amp" } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_pv_input_voltage", "legendFormat": "voltage (V)", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_pv_input_current", "legendFormat": "current (A)", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_pv_input_voltage * inverter_pv_input_current", "legendFormat": "power (W)", "refId": "C" }
+      ] },
+
+    { "id": 25, "type": "stat", "title": "PV peak (24h)", "gridPos": { "h": 7, "w": 8, "x": 16, "y": 38 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max_over_time((inverter_pv_input_voltage * inverter_pv_input_current)[24h:2m])", "refId": "A" } ] },
+
+    { "id": 106, "type": "row", "title": "🔗 Grid & output", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 } },
+
+    { "id": 26, "type": "timeseries", "title": "Voltages (grid / output / bus)", "gridPos": { "h": 7, "w": 12, "x": 0, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "volt", "custom": { "drawStyle": "line", "fillOpacity": 0, "showPoints": "never", "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_grid_voltage", "legendFormat": "grid", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_ac_output_voltage", "legendFormat": "output", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_bus_voltage", "legendFormat": "bus", "refId": "C" }
+      ] },
+
+    { "id": 27, "type": "timeseries", "title": "Frequencies", "gridPos": { "h": 7, "w": 6, "x": 12, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "rothz", "decimals": 2, "custom": { "drawStyle": "line", "showPoints": "never", "lineWidth": 1, "fillOpacity": 0 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_grid_frequency", "legendFormat": "grid", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_ac_output_frequency", "legendFormat": "output", "refId": "B" }
+      ] },
+
+    { "id": 28, "type": "stat", "title": "Grid uptime (24h)", "gridPos": { "h": 7, "w": 6, "x": 18, "y": 46 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 80 }, { "color": "green", "value": 98 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "avg_over_time((inverter_grid_voltage > bool 50)[24h:1m]) * 100", "refId": "A" } ] },
+
+    { "id": 107, "type": "row", "title": "🌡️ Health & averages", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 } },
+
+    { "id": 29, "type": "timeseries", "title": "Heatsink temperature", "gridPos": { "h": 7, "w": 12, "x": 0, "y": 54 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "celsius", "custom": { "drawStyle": "line", "fillOpacity": 15, "showPoints": "never", "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "inverter_heatsink_temperature", "legendFormat": "temp", "refId": "A" } ] },
+
+    { "id": 30, "type": "timeseries", "title": "Average load (1h / 24h / 7d)", "gridPos": { "h": 7, "w": 8, "x": 12, "y": 54 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt", "custom": { "drawStyle": "line", "showPoints": "never", "lineWidth": 1, "fillOpacity": 0 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "avg_over_time(inverter_ac_output_active_power[1h])", "legendFormat": "avg 1h", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "avg_over_time(inverter_ac_output_active_power[24h])", "legendFormat": "avg 24h", "refId": "B" }
+      ] },
+
+    { "id": 31, "type": "stat", "title": "Min SoC (24h)", "gridPos": { "h": 7, "w": 4, "x": 20, "y": 54 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 20 }, { "color": "green", "value": 40 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "min_over_time(inverter_battery_capacity[24h])", "refId": "A" } ] }
+  ]
+}

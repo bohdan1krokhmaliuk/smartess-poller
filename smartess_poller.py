@@ -116,6 +116,13 @@ MODE_NAMES = {
     "P": "PowerOn", "S": "Standby", "L": "Line", "B": "Battery",
     "F": "Fault", "H": "PowerSaving", "D": "Shutdown", "Y": "Bypass",
 }
+MODE_CODES = {"P": 0, "S": 1, "L": 2, "B": 3, "F": 4, "H": 5, "D": 6, "Y": 7}
+
+
+def publish_mode(mc, topic, letter):
+    mc.publish(topic + "mode", letter, retain=True)
+    mc.publish(topic + "mode_name", MODE_NAMES.get(letter, letter), retain=True)
+    mc.publish(topic + "mode_code", MODE_CODES.get(letter, -1), retain=True)
 
 # QPIRI (rated info) fields, in order, per PI30.
 QPIRI_FIELDS = [
@@ -341,8 +348,7 @@ def dispatch_reply(mc, topic, word, payload):
     if word == "QPIGS" and txt[:1].isdigit():
         publish_qpigs(mc, topic, txt)
     elif word == "QMOD":
-        mc.publish(topic + "mode", txt, retain=True)
-        mc.publish(topic + "mode_name", MODE_NAMES.get(txt, txt), retain=True)
+        publish_mode(mc, topic, txt)
     elif word == "QET":
         publish_qet(mc, topic, txt)
     elif word == "QPIRI" and txt[:1].isdigit():
@@ -387,8 +393,7 @@ def handle_fakeclient(sock, mc, cfg):
 
         mode = voltronic_text(request(sock, reader, QMOD))
         if mode:
-            mc.publish(topic + "mode", mode, retain=True)
-            mc.publish(topic + "mode_name", MODE_NAMES.get(mode, mode), retain=True)
+            publish_mode(mc, topic, mode)
 
         warn = voltronic_text(request(sock, reader, QPIWS))
         if warn:
