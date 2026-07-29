@@ -1,6 +1,10 @@
 # local config (may contain MQTT credentials)
 config.ini
 
+# dashboard secrets (Grafana admin password)
+.env
+dashboard/.env
+
 # captures / logs
 *.log
 relay.log

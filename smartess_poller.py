@@ -27,6 +27,7 @@ Environment variables (SMARTESS_*) override both. No code editing required.
 """
 
 import configparser
+import http.server
 import json
 import os
 import socket
@@ -60,6 +61,7 @@ DEFAULTS = {
     "cloud_host":    "",
     "cloud_port":    "502",
     "log_cloud":     "false",   # in mirror, print every cloud request/reply (for analysis)
+    "control_port":  "8899",    # HTTP endpoint to toggle mode from a dashboard button (0 = off)
 }
 
 
@@ -81,6 +83,7 @@ def load_config():
     cfg["listen_port"] = int(cfg["listen_port"])
     cfg["mqtt_port"] = int(cfg["mqtt_port"])
     cfg["cloud_port"] = int(cfg["cloud_port"])
+    cfg["control_port"] = int(cfg["control_port"])
     cfg["poll_interval"] = float(cfg["poll_interval"])
     cfg["sock_timeout"] = float(cfg["sock_timeout"])
     return cfg
@@ -495,6 +498,49 @@ def handle_passthrough(dongle, mc, cfg, cloud):
             pass
 
 
+def start_control_server(port, state, state_lock, set_mode):
+    """Tiny HTTP endpoint so a dashboard button can toggle the mode:
+       GET /control/local | GET /control/mirror | GET /control (status page)."""
+    PAGE = (
+        "<!doctype html><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<style>body{{font-family:system-ui;background:#111;color:#eee;text-align:center;"
+        "padding:2rem}}a.btn{{display:inline-block;margin:.4rem;padding:.8rem 1.2rem;"
+        "border-radius:.5rem;text-decoration:none;color:#fff}}.local{{background:#2563eb}}"
+        ".mirror{{background:#059669}}.cur{{font-size:1.3rem;margin:1rem}}</style>"
+        "<div class=cur>Mode: <b>{mode}</b></div>{msg}"
+        "<div><a class='btn local' href='/control/local'>LOCAL &mdash; fast logging</a>"
+        "<a class='btn mirror' href='/control/mirror'>MIRROR &mdash; app works</a></div>"
+        "<p><a style='color:#888' href='/'>&larr; dashboard</a></p>")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _send(self, msg=""):
+            with state_lock:
+                cur = state["mode"]
+            body = PAGE.format(mode=cur, msg=msg).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            path = self.path.split("?")[0].rstrip("/")
+            if path.endswith("/control/local") or path.endswith("/control/mirror"):
+                val = path.rsplit("/", 1)[1]
+                set_mode(val, "http")
+                self._send("<p>Switched to <b>%s</b>. Reconnect can take up to ~2 min.</p>" % val)
+            else:
+                self._send()
+
+        def log_message(self, *args):
+            pass
+
+    httpd = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    print("HTTP control on 0.0.0.0:%d  (/control/local, /control/mirror)" % port)
+
+
 def main():
     cfg = load_config()
     boot_mode = cfg["mode"].strip().lower()
@@ -504,29 +550,36 @@ def main():
     state = {"mode": boot_mode}
     state_lock = threading.Lock()
     sockets = {"conn": None, "cloud": None}   # current session's sockets (for live switching)
-    ctl_topic = cfg["topic"] + "control/mode"
+    topic = cfg["topic"]
+    ctl_topic = topic + "control/mode"
 
-    def on_connect(client, userdata, flags, rc):
-        client.subscribe(ctl_topic)
-        client.publish(cfg["topic"] + "mode_active", state["mode"], retain=True)
-
-    def on_message(client, userdata, msg):
-        val = msg.payload.decode("utf-8", "ignore").strip().lower()
+    def set_mode(val, source):
+        """Switch operating mode and drop the live session so the dongle
+        reconnects in the new mode. Shared by the MQTT and HTTP controls."""
+        val = (val or "").strip().lower()
         if val not in ("local", "mirror"):
-            return
+            return None
         with state_lock:
             changed = val != state["mode"]
             state["mode"] = val
             conn, cloud = sockets["conn"], sockets["cloud"]
-        client.publish(cfg["topic"] + "mode_active", val, retain=True)
+        mc.publish(topic + "mode_active", val, retain=True)
         if changed:
-            print(time.strftime("%H:%M:%S"), "mode ->", val, "(restarting session)")
-            for s in (conn, cloud):     # drop the live session so it re-establishes in the new mode
+            print(time.strftime("%H:%M:%S"), "mode ->", val, "via", source, "(restarting session)")
+            for s in (conn, cloud):     # drop the live session; the dongle reconnects in the new mode
                 if s is not None:
                     try:
                         s.close()
                     except OSError:
                         pass
+        return val
+
+    def on_connect(client, userdata, flags, rc):
+        client.subscribe(ctl_topic)
+        client.publish(topic + "mode_active", state["mode"], retain=True)
+
+    def on_message(client, userdata, msg):
+        set_mode(msg.payload.decode("utf-8", "ignore"), "mqtt")
 
     mc = mqtt.Client()
     if cfg["mqtt_user"]:
@@ -535,14 +588,17 @@ def main():
     mc.on_message = on_message
     mc.connect(cfg["mqtt_host"], cfg["mqtt_port"], 60)
     mc.loop_start()
-    print("MQTT connected -> %s:%d (topic %s)" % (cfg["mqtt_host"], cfg["mqtt_port"], cfg["topic"]))
+    print("MQTT connected -> %s:%d (topic %s)" % (cfg["mqtt_host"], cfg["mqtt_port"], topic))
+
+    if cfg["control_port"]:
+        start_control_server(cfg["control_port"], state, state_lock, set_mode)
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((cfg["listen_host"], cfg["listen_port"]))
     srv.listen(1)
     print("Listening on %s:%d" % (cfg["listen_host"], cfg["listen_port"]))
-    print("Mode: %s   (switch live: publish 'local' or 'mirror' to %s)"
+    print("Mode: %s   (toggle: MQTT %s = local|mirror, or GET /control/<mode>)"
           % (state["mode"], ctl_topic))
 
     while True:

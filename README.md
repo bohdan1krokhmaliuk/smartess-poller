@@ -200,6 +200,22 @@ mqtt:
       device_class: voltage
 ```
 
+## Dashboard (graphs)
+
+A ready-to-run, lightweight visualization stack (Grafana + VictoriaMetrics + Telegraf,
+all in Docker, sized for a Pi 3B+) lives in [`dashboard/`](dashboard/). It graphs the MQTT
+data and includes a **LOCAL / MIRROR** mode-switch panel wired to the poller's HTTP control
+endpoint. See [`dashboard/README.md`](dashboard/README.md).
+
+## Mode-toggle HTTP endpoint
+
+Besides MQTT, the poller exposes a small HTTP control endpoint (config `control_port`,
+default `8899`) so a dashboard button (or a phone bookmark) can switch modes:
+
+```
+GET /control/local     GET /control/mirror     GET /control   (status page)
+```
+
 ## Notes & safety
 
 - Keep `poll_interval` at 5–10 s. The dongle's microcontroller and the inverter's RS485 bus

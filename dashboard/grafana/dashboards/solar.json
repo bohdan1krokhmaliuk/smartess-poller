@@ -1,0 +1,145 @@
+{
+  "uid": "smartess-solar",
+  "title": "Solar / Inverter",
+  "tags": ["smartess"],
+  "timezone": "",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Battery SoC",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_battery_capacity", "legendFormat": "SoC", "range": true, "refId": "A" } ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Battery Voltage",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "volt", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_battery_voltage", "legendFormat": "V", "range": true, "refId": "A" } ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Output Load",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_ac_output_active_power", "legendFormat": "W", "range": true, "refId": "A" } ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "PV Voltage",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "volt", "decimals": 1 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_pv_input_voltage", "legendFormat": "PV V", "range": true, "refId": "A" } ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Output Power",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "watt", "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 12, "showPoints": "never", "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_ac_output_active_power", "legendFormat": "active (W)", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_ac_output_apparent_power", "legendFormat": "apparent (VA)", "range": true, "refId": "B" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Battery",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 8, "showPoints": "never", "lineWidth": 1 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "voltage (V)" }, "properties": [ { "id": "unit", "value": "volt" } ] },
+          { "matcher": { "id": "byName", "options": "SoC (%)" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "custom.axisPlacement", "value": "right" } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_battery_voltage", "legendFormat": "voltage (V)", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_battery_capacity", "legendFormat": "SoC (%)", "range": true, "refId": "B" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Solar (PV)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 8, "showPoints": "never", "lineWidth": 1 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "power (W)" }, "properties": [ { "id": "unit", "value": "watt" }, { "id": "custom.axisPlacement", "value": "right" } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_pv_input_voltage", "legendFormat": "voltage (V)", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_pv_input_current", "legendFormat": "current (A)", "range": true, "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_pv_charging_power", "legendFormat": "power (W)", "range": true, "refId": "C" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Grid / Output voltage & temperature",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": {
+        "defaults": { "unit": "volt", "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 0, "showPoints": "never", "lineWidth": 1 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "heatsink (°C)" }, "properties": [ { "id": "unit", "value": "celsius" }, { "id": "custom.axisPlacement", "value": "right" } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_grid_voltage", "legendFormat": "grid (V)", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_ac_output_voltage", "legendFormat": "output (V)", "range": true, "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "inverter_heatsink_temperature", "legendFormat": "heatsink (°C)", "range": true, "refId": "C" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Total Energy",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "editorMode": "code", "expr": "energy_value", "legendFormat": "kWh", "range": true, "refId": "A" } ]
+    },
+    {
+      "id": 10,
+      "type": "text",
+      "title": "Operating mode",
+      "gridPos": { "h": 5, "w": 18, "x": 6, "y": 20 },
+      "options": {
+        "mode": "markdown",
+        "content": "### ⚙️ Operating mode\n\n**[▶ LOCAL — fast 10s logging](/control/local)**  · maximum data, SmartESS app goes offline\n\n**[▶ MIRROR — SmartESS app works](/control/mirror)**  · app fully usable, data at the cloud's slower rate\n\n_Switching drops the current session; the dongle reconnects in the new mode within ~2 minutes._"
+      }
+    }
+  ]
+}

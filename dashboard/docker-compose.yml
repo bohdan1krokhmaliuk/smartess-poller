@@ -1,0 +1,65 @@
+# Visualization stack for smartess-poller: MQTT -> Telegraf -> VictoriaMetrics -> Grafana.
+# Designed to sit alongside Pi-hole / Vaultwarden / Caddy on a Raspberry Pi 3B+ (1 GB RAM,
+# armv7): memory-limited, isolated network, Grafana fronted by your existing Caddy.
+#
+#   cp .env.example .env   # set the Grafana admin password
+#   docker compose up -d
+#
+# Images are multi-arch and include linux/arm/v7.
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: smartess-vm
+    restart: unless-stopped
+    command:
+      - "-storageDataPath=/vmdata"
+      - "-retentionPeriod=24"          # keep 24 months of history
+      - "-memory.allowedPercent=60"
+    ports:
+      - "127.0.0.1:8428:8428"          # exposed to host only, so host-networked Telegraf can write
+    volumes:
+      - vmdata:/vmdata
+    mem_limit: 128m
+    networks: [smartess]
+
+  telegraf:
+    image: telegraf:1.30
+    container_name: smartess-telegraf
+    restart: unless-stopped
+    network_mode: host                 # so it can reach Mosquitto (127.0.0.1:1883) and VM (127.0.0.1:8428)
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    mem_limit: 96m
+    depends_on: [victoriametrics]
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: smartess-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=${GF_ROOT_URL:-}
+      - GF_PANELS_DISABLE_SANITIZE_HTML=true    # allow the mode-switch buttons panel
+      - GF_AUTH_ANONYMOUS_ENABLED=true          # view the dashboard without login (LAN only, behind Caddy)
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+    ports:
+      - "3001:3000"                    # published on the host; Caddy reverse-proxies to <pi-ip>:3001
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    mem_limit: 256m
+    depends_on: [victoriametrics]
+    networks: [smartess]
+
+volumes:
+  vmdata:
+  grafana-data:
+
+networks:
+  smartess:
