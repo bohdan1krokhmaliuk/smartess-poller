@@ -409,8 +409,7 @@ def handle_passthrough(dongle, mc, cfg, cloud):
     our_out = {}      # msg-id -> (command_word, timestamp) for polls WE injected
     cloud_cmd = {}    # msg-id -> (command_word, timestamp) for the cloud's own requests
     last_cloud = [0.0]   # timestamp of the last frame seen from the cloud
-    SETTLE = 25.0        # seconds to wait after connect before injecting anything
-    QUIET_GAP = 4.0      # only inject when the cloud link has been idle this long
+    SETTLE = 3.0         # small delay after connect so we don't hit the first handshake
 
     def dongle_send(data):
         with dongle_send_lock:
@@ -493,23 +492,17 @@ def handle_passthrough(dongle, mc, cfg, cloud):
             our_out[mid] = (word, time.time())
         dongle_send(_build(mid, payload))
 
-    def cloud_busy():
-        with state_lock:
-            pending = bool(cloud_cmd)
-        return pending or (time.time() - last_cloud[0] < QUIET_GAP)
-
     def injector():
         if cfg["active_poll"].strip().lower() != "true":
             return
-        if stop.wait(SETTLE):          # let the cloud finish its handshake first
+        if stop.wait(SETTLE):          # tiny delay so we skip only the first handshake
             return
+        print(time.strftime("%H:%M:%S"), "injector active (parallel polling)")
         did_rated = False
         last_energy = 0.0
         try:
             while not stop.wait(cfg["poll_interval"]):
-                expire()
-                if cloud_busy():       # never inject while the cloud is mid-exchange
-                    continue
+                expire()               # free ids from lost/old requests
                 if not did_rated:
                     inject("QPIRI", QPIRI)
                     did_rated = True
@@ -558,7 +551,7 @@ def main():
 
     while True:
         conn, addr = srv.accept()
-        print("Dongle connected:", addr)
+        print(time.strftime("%H:%M:%S"), "Dongle connected:", addr)
         cloud = None
         try:
             if cfg["cloud_host"]:
@@ -581,6 +574,7 @@ def main():
                         s.close()
                     except OSError:
                         pass
+            print(time.strftime("%H:%M:%S"), "Session ended:", addr)
 
 
 if __name__ == "__main__":
