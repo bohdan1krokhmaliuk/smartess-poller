@@ -82,6 +82,7 @@ def load_config():
 QPIGS = bytes.fromhex("ff045150494753b7a90d")   # general status (live telemetry)
 QMOD  = bytes.fromhex("ff04514d4f4449c10d")     # current working mode
 QPIWS = bytes.fromhex("ff045150495753b4da0d")   # warning / fault status
+QET   = bytes.fromhex("ff0451455481b60d")       # total generated energy
 QID   = bytes.fromhex("ff04514944d6ea0d")       # serial number (static)
 QPIRI = bytes.fromhex("ff045150495249f8540d")   # rated information (static)
 
@@ -101,6 +102,57 @@ QPIGS_FIELDS = [
 MODE_NAMES = {
     "P": "PowerOn", "S": "Standby", "L": "Line", "B": "Battery",
     "F": "Fault", "H": "PowerSaving", "D": "Shutdown", "Y": "Bypass",
+}
+
+# QPIRI (rated info) fields, in order, per PI30.
+QPIRI_FIELDS = [
+    "grid_rating_voltage", "grid_rating_current",
+    "ac_output_rating_voltage", "ac_output_rating_frequency",
+    "ac_output_rating_current", "ac_output_rating_apparent_power",
+    "ac_output_rating_active_power", "battery_rating_voltage",
+    "battery_recharge_voltage", "battery_under_voltage",
+    "battery_bulk_voltage", "battery_float_voltage", "battery_type",
+    "max_ac_charging_current", "max_charging_current", "input_voltage_range",
+    "output_source_priority", "charger_source_priority", "parallel_max_number",
+    "machine_type", "topology", "output_mode", "battery_redischarge_voltage",
+    "pv_ok_condition", "pv_power_balance",
+]
+# Human-readable names for the enum fields in QPIRI.
+QPIRI_ENUMS = {
+    "battery_type": {"0": "AGM", "1": "Flooded", "2": "User", "3": "Pylontech"},
+    "input_voltage_range": {"0": "Appliance", "1": "UPS"},
+    "output_source_priority": {"0": "Utility", "1": "Solar", "2": "SBU"},
+    "charger_source_priority": {"0": "UtilityFirst", "1": "SolarFirst",
+                                "2": "Solar+Utility", "3": "OnlySolar"},
+    "output_mode": {"0": "SingleMachine", "1": "Parallel", "2": "Phase1",
+                    "3": "Phase2", "4": "Phase3"},
+}
+
+# QPIGS "device status" byte (b7..b0), left-to-right in the 8-char string.
+QPIGS_STATUS_BITS = {  # topic_name: string index
+    "config_changed": 1,   # b6
+    "load_on":        3,   # b4
+    "charging":       5,   # b2
+    "charging_scc":   6,   # b1 (from solar controller)
+    "charging_ac":    7,   # b0 (from grid)
+}
+# QPIGS "device status 2" (b10 b9 b8), left-to-right in the 3-char string.
+QPIGS_STATUS2_BITS = {
+    "charging_to_float": 0,  # b10
+    "switch_on":         1,  # b9
+}
+# QPIWS warning/fault bit positions (index in the returned bit string) -> name.
+QPIWS_BITS = {
+    1: "inverter_fault", 2: "bus_over", 3: "bus_under", 4: "bus_soft_fail",
+    5: "line_fail", 6: "opv_short", 7: "inverter_voltage_low",
+    8: "inverter_voltage_high", 9: "over_temperature", 10: "fan_locked",
+    11: "battery_voltage_high", 12: "battery_low_alarm",
+    14: "battery_under_shutdown", 16: "over_load", 17: "eeprom_fault",
+    18: "inverter_over_current", 19: "inverter_soft_fail", 20: "self_test_fail",
+    21: "op_dc_over_voltage", 22: "battery_open", 23: "current_sensor_fail",
+    24: "battery_short", 25: "power_limit", 26: "pv_voltage_high",
+    27: "mppt_overload_fault", 28: "mppt_overload_warning",
+    29: "battery_too_low_to_charge",
 }
 
 # ------------------------------------------------------------------------- framing
@@ -184,6 +236,15 @@ def publish_qpigs(mc, topic, text):
         except ValueError:
             data[name] = val
         mc.publish(topic + name, data[name], retain=True)
+    # decode the two packed status fields into individual boolean topics
+    status = str(data.get("device_status", ""))
+    for name, idx in QPIGS_STATUS_BITS.items():
+        if len(status) > idx:
+            mc.publish(topic + "status/" + name, "1" if status[idx] == "1" else "0", retain=True)
+    status2 = str(data.get("device_status_2", ""))
+    for name, idx in QPIGS_STATUS2_BITS.items():
+        if len(status2) > idx:
+            mc.publish(topic + "status/" + name, "1" if status2[idx] == "1" else "0", retain=True)
     mc.publish(topic + "qpigs_json", json.dumps(data), retain=True)
     print(time.strftime("%H:%M:%S"),
           "AC %.1fV  LOAD %sW  BAT %.2fV %s%%  PV %.1fV %.1fA" % (
@@ -194,6 +255,43 @@ def publish_qpigs(mc, topic, text):
               data.get("pv_input_voltage", 0),
               data.get("pv_input_current", 0)))
     return data
+
+
+def publish_qpiri(mc, topic, text):
+    """Parse QPIRI rated info and publish per-field topics (+ enum names)."""
+    tokens = text.split()
+    for name, val in zip(QPIRI_FIELDS, tokens):
+        try:
+            out = float(val) if "." in val else int(val)
+        except ValueError:
+            out = val
+        mc.publish(topic + "rated/" + name, out, retain=True)
+        if name in QPIRI_ENUMS:
+            mc.publish(topic + "rated/" + name + "_name",
+                       QPIRI_ENUMS[name].get(val, val), retain=True)
+    mc.publish(topic + "rated_info", text, retain=True)
+
+
+def publish_qpiws(mc, topic, text):
+    """Parse QPIWS warning/fault bit string and publish active warnings."""
+    active = [name for idx, name in QPIWS_BITS.items()
+              if len(text) > idx and text[idx] == "1"]
+    mc.publish(topic + "warnings_active", ",".join(active) if active else "none", retain=True)
+    mc.publish(topic + "fault", "1" if active else "0", retain=True)
+    mc.publish(topic + "warning_status_raw", text, retain=True)
+
+
+def publish_qet(mc, topic, text):
+    """Parse QET total generated energy (Wh) and publish Wh + kWh."""
+    tok = text.split()
+    if not tok:
+        return
+    try:
+        wh = int(tok[0])
+    except ValueError:
+        return
+    mc.publish(topic + "energy_total_wh", wh, retain=True)
+    mc.publish(topic + "energy_total_kwh", round(wh / 1000.0, 3), retain=True)
 
 
 # ------------------------------------------------------------------------- session
@@ -209,15 +307,21 @@ def handle(sock, mc, cfg):
         pass
 
     # static info, published once per connection
-    for cmd, key in ((QID, "inverter_serial"), (QPIRI, "rated_info")):
-        try:
-            txt = voltronic_text(request(sock, reader, cmd))
-            if txt:
-                mc.publish(topic + key, txt, retain=True)
-        except Exception:
-            pass
+    try:
+        sid = voltronic_text(request(sock, reader, QID))
+        if sid:
+            mc.publish(topic + "inverter_serial", sid, retain=True)
+    except Exception:
+        pass
+    try:
+        rated = voltronic_text(request(sock, reader, QPIRI))
+        if rated and rated[:1].isdigit():
+            publish_qpiri(mc, topic, rated)
+    except Exception:
+        pass
 
     last_keepalive = time.time()
+    last_energy = 0.0
     while True:
         txt = voltronic_text(request(sock, reader, QPIGS))
         if txt and txt[:1].isdigit():
@@ -230,7 +334,14 @@ def handle(sock, mc, cfg):
 
         warn = voltronic_text(request(sock, reader, QPIWS))
         if warn:
-            mc.publish(topic + "warning_status", warn, retain=True)
+            publish_qpiws(mc, topic, warn)
+
+        # total energy changes slowly; poll it at most once a minute
+        if time.time() - last_energy > 60:
+            energy = voltronic_text(request(sock, reader, QET))
+            if energy:
+                publish_qet(mc, topic, energy)
+            last_energy = time.time()
 
         if time.time() - last_keepalive > 30:
             try:

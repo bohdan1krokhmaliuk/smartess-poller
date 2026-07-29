@@ -118,10 +118,18 @@ journalctl -u smartess-poller -f
 | `smartess/battery_voltage`, `battery_charge_current`, `battery_discharge_current`, `battery_capacity` | battery |
 | `smartess/pv_input_voltage`, `pv_input_current`, `pv_charging_power` | solar |
 | `smartess/heatsink_temperature` | temperature |
-| `smartess/device_status`, `device_status_2`, `warning_status` | status/fault bits |
+| `smartess/energy_total_wh`, `energy_total_kwh` | total generated energy (`QET`) |
 | `smartess/mode`, `mode_name` | working mode (L=Line, B=Battery, …) |
+| `smartess/status/load_on`, `charging`, `charging_scc`, `charging_ac`, `charging_to_float`, `switch_on`, `config_changed` | decoded device-status bits (0/1) |
+| `smartess/warnings_active` | comma-list of active warnings (or `none`) |
+| `smartess/fault` | `1` if any warning/fault bit is set, else `0` |
+| `smartess/warning_status_raw` | raw `QPIWS` bit string |
 | `smartess/qpigs_json` | all `QPIGS` fields as one JSON object |
-| `smartess/inverter_serial`, `rated_info` | static info (published once per connect) |
+| `smartess/rated/*` | rated info from `QPIRI` (e.g. `rated/battery_float_voltage`, `rated/output_source_priority_name`, `rated/max_charging_current`) |
+| `smartess/inverter_serial` | serial number (`QID`) |
+
+Static topics (`rated/*`, `inverter_serial`) are published once per connection; everything
+else refreshes every `poll_interval` (energy at most once a minute).
 
 All values are published with the MQTT `retain` flag, so new subscribers get the last value
 immediately.
