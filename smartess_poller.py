@@ -59,6 +59,7 @@ DEFAULTS = {
     "cloud_host":    "",
     "cloud_port":    "502",
     "active_poll":   "true",  # in passthrough, also inject our own QPIGS/QMOD/QET polls
+    "log_cloud":     "false", # in passthrough, print every cloud request/reply (analysis)
 }
 
 
@@ -403,6 +404,7 @@ def handle_passthrough(dongle, mc, cfg, cloud):
     """Transparently relay dongle <-> real Eybond cloud (the SmartESS app keeps
     working), while injecting our own polls and parsing telemetry into MQTT."""
     topic = cfg["topic"]
+    LOG_CLOUD = cfg["log_cloud"].strip().lower() == "true"
     stop = threading.Event()
     state_lock = threading.Lock()
     dongle_send_lock = threading.Lock()
@@ -436,10 +438,13 @@ def handle_passthrough(dongle, mc, cfg, cloud):
 
     def on_cloud_frame(raw):
         last_cloud[0] = time.time()
-        word = cmd_word(raw[6:])
-        if word:
-            with state_lock:
-                cloud_cmd[raw[1]] = (word, time.time())
+        p = raw[6:]
+        word = cmd_word(p)
+        label = word or ("FF%02X" % p[1] if len(p) >= 2 else "?")
+        with state_lock:
+            cloud_cmd[raw[1]] = (label, time.time())
+        if LOG_CLOUD:
+            print(time.strftime("%H:%M:%S"), "cloud->", label)
 
     def split_out(buf):
         """Split dongle bytes: forward everything to the cloud EXCEPT frames whose
@@ -492,6 +497,11 @@ def handle_passthrough(dongle, mc, cfg, cloud):
                     with state_lock:
                         w = cloud_cmd.pop(f[1], None)
                     if w:
+                        if LOG_CLOUD:
+                            p = f[6:]
+                            t = voltronic_text(p)
+                            print(time.strftime("%H:%M:%S"), "cloud<-", w[0],
+                                  t if t is not None else p.hex())
                         try:
                             dispatch_reply(mc, topic, w[0], f[6:])
                         except Exception:
