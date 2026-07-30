@@ -137,22 +137,26 @@ const dv={
 };
 dv.gridCost=w=>`(${dv.grid(w)})*${TARIFF}`;
 dv.savings=w=>`clamp_min((${dv.cons(w)})-(${dv.grid(w)}),0)*${TARIFF}`;
+dv.total=w=>`(${dv.cons(w)})*${TARIFF}`;
 const MODE_MAP={0:["PowerOn","var(--accent)"],1:["Standby","var(--warn)"],2:["Line","var(--good)"],3:["Battery","var(--accent)"],4:["Fault","var(--bad)"],5:["PowerSaving","var(--warn)"],6:["Shutdown","var(--muted)"],7:["Bypass","var(--warn)"]};
 const FAULT_MAP={0:["OK","var(--good)"],1:["FAULT","var(--bad)"]};
 
 const SECTIONS=[
  {name:"🔌 Device", panels:[{t:"info",title:"Inverter",span:12}]},
  {name:"⚡ Now", panels:[
-   {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[20,"var(--warn)"],[50,"var(--good)"]]},
-   {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]]},
-   {t:"stat",title:"Battery",expr:M.batV,live:1,unit:"V",dec:2,span:2},
-   {t:"stat",title:"Load",expr:M.load,live:1,unit:"W",span:2},
-   {t:"stat",title:"PV power",expr:M.pvpow,live:1,unit:"W",span:2},
-   {t:"stat",title:"Grid",expr:M.gridV,live:1,unit:"V",dec:1,span:2,th:[[0,"var(--bad)"],[50,"var(--good)"]]},
-   {t:"stat",title:"Heatsink",expr:M.temp,live:1,unit:"°C",span:2,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
-   {t:"stat",title:"Mode",expr:M.mode,live:1,map:MODE_MAP,span:2},
-   {t:"stat",title:"Status",expr:M.fault,live:1,map:FAULT_MAP,span:2},
-   {t:"stat",title:"Peak load",dyn:dv.peakLoad,unit:"W",span:2},
+   {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[20,"var(--warn)"],[50,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
+   {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
+   {t:"multi",title:"Voltages",span:3,items:[
+     {label:"Grid",expr:M.gridV,live:1,unit:"V",dec:1,color:"var(--accent)"},
+     {label:"PV",expr:M.pvV,live:1,unit:"V",dec:1,color:"var(--warn)"},
+     {label:"Battery",expr:M.batV,live:1,unit:"V",dec:2,color:"var(--good)"}]},
+   {t:"multi",title:"Load",span:3,items:[
+     {label:"Now",expr:M.load,live:1,unit:"W",color:"var(--text)"},
+     {label:"Peak",dyn:dv.peakLoad,unit:"W",color:"var(--muted)"}]},
+   {t:"stat",title:"PV power",expr:M.pvpow,live:1,unit:"W",span:3},
+   {t:"stat",title:"Heatsink",expr:M.temp,live:1,unit:"°C",span:3,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
+   {t:"stat",title:"Mode",expr:M.mode,live:1,map:MODE_MAP,span:3},
+   {t:"stat",title:"Status",expr:M.fault,live:1,map:FAULT_MAP,span:3},
  ]},
  {name:"🔋 Energy", panels:[
    {t:"stat",title:"Generated",dyn:dv.pv,unit:"kWh",dec:2,span:2},
@@ -162,15 +166,11 @@ const SECTIONS=[
    {t:"stat",title:"Self-sufficiency",dyn:dv.self,unit:"%",dec:0,span:2,th:[[0,"var(--warn)"],[50,"var(--good)"]]},
    {t:"stat",title:"PV total (life)",expr:M.pvtot,live:1,unit:"kWh",dec:1,span:2},
  ]},
- {name:"💰 Cost", panels:[
-   {t:"stat",title:"Grid cost",dyn:dv.gridCost,unit:"money",dec:2,span:3,th:[[0,"var(--warn)"]]},
-   {t:"stat",title:"Solar savings",dyn:dv.savings,unit:"money",dec:2,span:3,th:[[0,"var(--good)"]]},
- ]},
- {name:"📈 History & state", panels:[
-   {t:"chart",kind:"bars",title:"Energy per day (kWh)",unit:"kWh",span:12,series:[
-     {counter:"energymeter_pv_total",label:"generated",color:"#f59e0b"},
-     {counter:"energymeter_consumed_total",label:"consumed",color:"#3b82f6"}]},
-   {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
+ {name:"💰 Cost (selected range)", panels:[
+   {t:"multi",title:"Cost",span:6,items:[
+     {label:"Total",dyn:dv.total,unit:"money",dec:2,color:"var(--text)"},
+     {label:"Grid",dyn:dv.gridCost,unit:"money",dec:2,color:"var(--bad)"},
+     {label:"Solar saved",dyn:dv.savings,unit:"money",dec:2,color:"var(--good)"}]},
  ]},
  {name:"📊 Power by source", panels:[
    {t:"chart",title:"Sources & load (W)",unit:"W",span:8,series:[
@@ -179,6 +179,12 @@ const SECTIONS=[
    {t:"chart",title:"Self-sufficiency %",unit:"%",min:0,max:100,span:4,series:[{expr:M.selfnow,label:"PV coverage",color:"#22c55e",fill:1}]},
    {t:"chart",title:"Output power",unit:"W",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
    {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:M.loadpct,label:"load",color:"#f59e0b",fill:1}]},
+ ]},
+ {name:"📈 History & state", panels:[
+   {t:"chart",kind:"bars",title:"Energy per day (last 30 days, kWh)",unit:"kWh",span:12,series:[
+     {counter:"energymeter_pv_total",label:"generated",color:"#f59e0b"},
+     {counter:"energymeter_consumed_total",label:"consumed",color:"#3b82f6"}]},
+   {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
  ]},
  {name:"🔋 Battery", panels:[
    {t:"chart",title:"SoC & voltage",span:6,series:[{expr:M.batV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.soc,label:"SoC",color:"#22c55e",unit:"%",axis:"right",min:0,max:100}]},
@@ -233,14 +239,14 @@ function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:t
 function stepSec(){ const {from,to}=range(); return Math.max(10, Math.round((to-from)/1000/400)); }
 function windowSec(){ const {from,to}=range(); const evalT=Math.min(to,Date.now()); return {evalT, win:Math.max(60,Math.round((evalT-from)/1000))}; }
 
-function gaugeSVG(el,v,min,max,unit,dec,th){ const cx=80,cy=80,r=60,a0=140,a1=400;
+function gaugeSVG(el,v,min,max,unit,dec,th,sub){ const cx=80,cy=76,r=60,a0=140,a1=400;
   const frac=(v==null)?0:Math.max(0,Math.min(1,(v-min)/(max-min))); const col=resolveColor(thColor(v,th)||"var(--accent)");
   const pt=a=>{const x=a*Math.PI/180;return [cx+r*Math.cos(x),cy+r*Math.sin(x)];};
   const arc=(f,t)=>{const [x0,y0]=pt(f),[x1,y1]=pt(t);return `M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 ${(t-f)>180?1:0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;};
-  el.innerHTML=`<svg viewBox="0 0 160 120"><path d="${arc(a0,a1)}" fill="none" stroke="${cssVar('--grid')}" stroke-width="12" stroke-linecap="round"/>
+  el.innerHTML=`<svg viewBox="0 0 160 122"><path d="${arc(a0,a1)}" fill="none" stroke="${cssVar('--grid')}" stroke-width="12" stroke-linecap="round"/>
     <path d="${arc(a0,a0+(a1-a0)*frac)}" fill="none" stroke="${col}" stroke-width="12" stroke-linecap="round"/>
-    <text x="80" y="78" text-anchor="middle" font-size="27" font-weight="700" fill="${cssVar('--text')}">${v==null?'—':(dec!=null?v.toFixed(dec):Math.round(v))}</text>
-    <text x="80" y="98" text-anchor="middle" font-size="12" fill="${cssVar('--muted')}">${unit||''}</text></svg>`; }
+    <text x="80" y="72" text-anchor="middle" font-size="36" font-weight="800" fill="${cssVar('--text')}">${v==null?'—':(dec!=null?v.toFixed(dec):Math.round(v))}<tspan font-size="16" dx="1" fill="${cssVar('--muted')}">${unit||''}</tspan></text>
+    ${sub?`<text x="80" y="97" text-anchor="middle" font-size="15" font-weight="600" fill="${cssVar('--muted')}">${sub}</text>`:''}</svg>`; }
 
 function segs(pts,gap){ const out=[]; let cur=[]; for(let i=0;i<pts.length;i++){ if(i&&pts[i][0]-pts[i-1][0]>gap){ if(cur.length)out.push(cur); cur=[]; } cur.push(pts[i]); } if(cur.length)out.push(cur); return out; }
 function niceTicks(mn,mx,n){ if(mn===mx)return [mn]; const raw=(mx-mn)/n,mag=Math.pow(10,Math.floor(Math.log10(raw))),nm=raw/mag; const s=(nm>=5?5:nm>=2?2:1)*mag,out=[]; for(let v=Math.ceil(mn/s)*s;v<=mx+1e-9;v+=s)out.push(v); return out.length?out:[mn,mx]; }
@@ -261,8 +267,9 @@ class Chart{
     this.ov.addEventListener("dblclick",()=>{ if(state.kind==="preset")setPreset(state.dur); else refresh(); });
   }
   mx(e){ return e.clientX-this.base.getBoundingClientRect().left; }
+  domain(){ if(this.p.kind==="bars"){ const d=new Date(); d.setHours(0,0,0,0); return {from:d.getTime()-29*864e5, to:Date.now()+864e5}; } return range(); }
   geom(){ const w=this.base.clientWidth,h=this.base.clientHeight,hasR=this.series.some(s=>s.axis==="right"),tl=this.p.kind==="timeline"; return {w,h,pl:tl?8:46,pr:hasR?46:12,pt:8,pb:20,hasR}; }
-  xToT(x){ const g=this.geom(),{from,to}=range(); return from+(x-g.pl)/(g.w-g.pl-g.pr)*(to-from); }
+  xToT(x){ const g=this.geom(),{from,to}=this.domain(); return from+(x-g.pl)/(g.w-g.pl-g.pr)*(to-from); }
   setData(series){ this.series=series; this.draw(); }
   scales(){ const {from,to}=range(); const g=this.geom();
     const rng=(arr,pmin,pmax)=>{ let mn=Infinity,mx=-Infinity; arr.forEach(s=>s.pts.forEach(p=>{if(p[1]<mn)mn=p[1];if(p[1]>mx)mx=p[1];}));
@@ -271,13 +278,18 @@ class Chart{
     const [lmin,lmax]=rng(L,this.p.min,this.p.max),[rmin,rmax]=rng(R,rp.min,rp.max); return {from,to,lmin,lmax,rmin,rmax,g}; }
   draw(){ const c=this.base,dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight; if(!w)return;
     c.width=w*dpr;c.height=h*dpr;this.ov.width=w*dpr;this.ov.height=h*dpr; const x=c.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,w,h);
-    const {from,to}=range(),g=this.geom(),grid=cssVar("--grid"),muted=cssVar("--muted");
+    const {from,to}=this.domain(),g=this.geom(),grid=cssVar("--grid"),muted=cssVar("--muted");
     const X=t=>g.pl+(t-from)/(to-from)*(w-g.pl-g.pr);
     x.font="10px -apple-system,system-ui,sans-serif"; x.textAlign="center"; x.textBaseline="top";
     timeTicks(from,to).forEach(tk=>{const px=X(tk.t);x.strokeStyle=grid;x.beginPath();x.moveTo(px,g.pt);x.lineTo(px,h-g.pb);x.stroke();x.fillStyle=muted;x.fillText(tk.l,px,h-g.pb+4);});
     const empty=this.series.every(s=>!s.pts||!s.pts.length);
     if(empty){ x.fillStyle=muted;x.textBaseline="middle";x.fillText("No data in range",w/2,h/2); this._X=X; this.drawOv(); return; }
-    if(this.p.kind==="timeline"){ const s=this.series[0],y0=g.pt,y1=h-g.pb; for(let i=0;i<s.pts.length;i++){ const t0=s.pts[i][0],t1=(i<s.pts.length-1?s.pts[i+1][0]:Math.min(to,Date.now())); const m=this.p.map[Math.round(s.pts[i][1])]; if(!m)continue; x.fillStyle=hexA(resolveColor(m[1]),.85); x.fillRect(X(t0),y0,Math.max(1,X(t1)-X(t0)),y1-y0); } this._X=X; this.drawOv(); return; }
+    if(this.p.kind==="timeline"){ const s=this.series[0],y0=g.pt,y1=h-g.pb;
+      const runs=[]; for(const p of s.pts){ const v=Math.round(p[1]); if(runs.length&&runs[runs.length-1].v===v)continue; runs.push({t:p[0],v}); }
+      for(let i=0;i<runs.length;i++){ const t0=runs[i].t,t1=(i<runs.length-1?runs[i+1].t:Math.min(to,Date.now())),m=this.p.map[runs[i].v]; if(!m)continue;
+        const xa=X(t0),xb=X(t1); x.fillStyle=hexA(resolveColor(m[1]),.9); x.fillRect(xa,y0,Math.max(1,xb-xa),y1-y0);
+        if(xb-xa>44){ x.fillStyle="#fff"; x.textAlign="center"; x.textBaseline="middle"; x.font="11px system-ui"; x.fillText(m[0],(xa+xb)/2,(y0+y1)/2); } }
+      this._X=X; this.drawOv(); return; }
     const S=this.scales(); const YL=v=>g.pt+(1-(v-S.lmin)/(S.lmax-S.lmin))*(h-g.pt-g.pb); const YR=v=>g.pt+(1-(v-S.rmin)/(S.rmax-S.rmin))*(h-g.pt-g.pb);
     x.textAlign="right";x.textBaseline="middle";x.strokeStyle=grid;x.fillStyle=muted;
     niceTicks(S.lmin,S.lmax,4).forEach(v=>{const y=YL(v);x.beginPath();x.moveTo(g.pl,y);x.lineTo(w-g.pr,y);x.stroke();x.fillText(fmtAxis(v),g.pl-5,y);});
@@ -322,18 +334,21 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
 function renderStat(c){ const p=c.p,v=c.last; if(v===undefined){ c.el.innerHTML='<span class="err">—</span>'; return; }
   if(p.map){ const m=p.map[Math.round(v)]; c.el.innerHTML=(v==null||!m)?"—":`<span style="color:${resolveColor(m[1])}">${m[0]}</span>`; return; }
   c.el.textContent=fmt(v,p.unit,p.dec); const col=thColor(v,p.th); c.el.style.color=col?resolveColor(col):"var(--text)"; }
-function renderGauge(c){ const p=c.p; gaugeSVG(c.el,c.last,p.min,p.max,p.unit,p.dec,p.th); }
+function renderGauge(c){ const p=c.p; gaugeSVG(c.el,c.last,p.min,p.max,p.unit,p.dec,p.th, p.sub?fmt(c.subv,p.sub.unit,p.sub.dec):null); }
+function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>`<div style="display:flex;justify-content:space-between;align-items:baseline;line-height:1.5"><span style="color:var(--muted);font-weight:600;font-size:.82rem">${it.label}</span><b style="color:${resolveColor(it.color||'var(--text)')};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b></div>`).join(""); }
 function renderInfo(c){ const i=c.last||{}; c.el.innerHTML = (i.model||i.serial||i.firmware) ?
   `<b>Model</b> ${i.model||"—"} &nbsp;·&nbsp; <b>Serial</b> ${i.serial||"—"} &nbsp;·&nbsp; <b>Protocol</b> ${i.protocol||"—"} &nbsp;·&nbsp; <b>FW</b> ${i.firmware||"—"}` : "—"; }
 
 async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
   await Promise.all(cards.map(async c=>{ const p=c.p;
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
-      if(p.kind==="bars"){ const from0=new Date(); from0.setHours(0,0,0,0); const start=Math.min(from, from0.getTime()-(from0.getTime()-from));
-        const series=await Promise.all(p.series.map(async s=>({...s, pts:await qRange(`increase(${s.counter}[1d])`, from, to, 86400)}))); c.chart.setData(series); }
+      if(p.kind==="bars"){ const dom=c.chart.domain();
+        const series=await Promise.all(p.series.map(async s=>({...s, pts:await qRange(`increase(${s.counter}[1d])`, dom.from, dom.to, 86400)}))); c.chart.setData(series); }
       else { const series=await Promise.all(p.series.map(async s=>({...s,pts:await qRange(s.expr,from,to,st)}))); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
-    else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); (p.t==="gauge"?renderGauge:renderStat)(c); }
+    else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
+    else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); renderGauge(c); }
+    else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
   loadMode();
@@ -361,7 +376,7 @@ document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classL
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
 function applyTheme(t){ if(t)document.documentElement.setAttribute("data-theme",t); else document.documentElement.removeAttribute("data-theme"); document.getElementById("themeBtn").textContent=curTheme()==="dark"?"☀️":"🌙";
-  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="info") renderInfo(c); else renderStat(c); }); }
+  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="info") renderInfo(c); else if(c.p.t==="multi") renderMulti(c); else renderStat(c); }); }
 document.getElementById("themeBtn").addEventListener("click",()=>{ const t=curTheme()==="dark"?"light":"dark"; localStorage.setItem("theme",t); applyTheme(t); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if(!localStorage.getItem("theme"))applyTheme(null); });
 applyTheme(localStorage.getItem("theme")||null);
