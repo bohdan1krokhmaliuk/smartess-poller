@@ -252,6 +252,67 @@ def voltronic_text(payload):
 
 
 # ------------------------------------------------------------------------- publishing
+class EnergyMeter:
+    """Integrates power (W) into energy (Wh) counters per source, with a daily
+    'today' reset (local midnight) and a lifetime total. State is persisted to
+    disk so it survives restarts. Gaps > 10 min are skipped (inverter offline)."""
+
+    KEYS = ("consumed", "pv", "battery_out", "battery_in", "grid")
+
+    def __init__(self, path):
+        self.path = path
+        self.last_t = None
+        self.day = None
+        self.total = {k: 0.0 for k in self.KEYS}
+        self.today = {k: 0.0 for k in self.KEYS}
+        self._last_save = 0.0
+        try:
+            with open(self.path) as f:
+                d = json.load(f)
+            self.day = d.get("day")
+            self.total.update(d.get("total", {}))
+            self.today.update(d.get("today", {}))
+        except Exception:
+            pass
+
+    def _save(self):
+        try:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"day": self.day, "total": self.total, "today": self.today}, f)
+            os.replace(tmp, self.path)
+        except Exception:
+            pass
+
+    def update(self, powers, now):
+        localday = time.strftime("%Y-%m-%d", time.localtime(now))
+        if self.day != localday:
+            self.day = localday
+            self.today = {k: 0.0 for k in self.KEYS}
+        if self.last_t is not None:
+            dt = now - self.last_t
+            if 0 < dt < 600:                       # skip large gaps (offline)
+                for k in self.KEYS:
+                    wh = powers.get(k, 0.0) * dt / 3600.0
+                    self.total[k] += wh
+                    self.today[k] += wh
+        self.last_t = now
+        if now - self._last_save > 60:             # throttle SD writes to ~1/min
+            self._save()
+            self._last_save = now
+
+    def stats_kwh(self):
+        out = {}
+        for k in self.KEYS:
+            out[k + "_today"] = round(self.today[k] / 1000.0, 3)
+            out[k + "_total"] = round(self.total[k] / 1000.0, 3)
+        return out
+
+
+_meter = EnergyMeter(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  ".energy_state.json"))
+
+
 def publish_qpigs(mc, topic, text):
     tokens = text.split()
     data = {}
@@ -271,6 +332,21 @@ def publish_qpigs(mc, topic, text):
         if len(status2) > idx:
             mc.publish(topic + "status/" + name, "1" if status2[idx] == "1" else "0", retain=True)
     mc.publish(topic + "qpigs_json", json.dumps(data), retain=True)
+
+    # energy accounting: integrate the per-source power into Wh counters
+    try:
+        bv = float(data.get("battery_voltage", 0) or 0)
+        p_load = float(data.get("ac_output_active_power", 0) or 0)
+        p_pv = float(data.get("pv_input_voltage", 0) or 0) * float(data.get("pv_input_current", 0) or 0)
+        p_bout = bv * float(data.get("battery_discharge_current", 0) or 0)
+        p_bin = bv * float(data.get("battery_charge_current", 0) or 0)
+        p_grid = max(p_load + p_bin - p_pv - p_bout, 0.0)
+        _meter.update({"consumed": p_load, "pv": p_pv, "battery_out": p_bout,
+                       "battery_in": p_bin, "grid": p_grid}, time.time())
+        mc.publish(topic + "energy_stats", json.dumps(_meter.stats_kwh()), retain=True)
+    except Exception:
+        pass
+
     print(time.strftime("%H:%M:%S"),
           "AC %.1fV  LOAD %sW  BAT %.2fV %s%%  PV %.1fV %.1fA" % (
               data.get("ac_output_voltage", 0),

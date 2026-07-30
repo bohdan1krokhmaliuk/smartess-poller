@@ -74,41 +74,41 @@
 
     { "id": 101, "type": "row", "title": "🔋 Energy (today / month)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 } },
 
-    { "id": 11, "type": "stat", "title": "Generated (24h)", "gridPos": { "h": 4, "w": 4, "x": 0, "y": 8 },
+    { "id": 11, "type": "stat", "title": "Generated today", "gridPos": { "h": 4, "w": 4, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
       "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
-      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max_over_time(energy_value[24h]) - min_over_time(energy_value[24h])", "refId": "A" } ] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "energymeter_pv_today", "refId": "A" } ] },
 
-    { "id": 12, "type": "stat", "title": "Generated (30d)", "gridPos": { "h": 4, "w": 4, "x": 4, "y": 8 },
+    { "id": 12, "type": "stat", "title": "PV total (lifetime)", "gridPos": { "h": 4, "w": 4, "x": 4, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
       "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 1 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
-      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max_over_time(energy_value[30d]) - min_over_time(energy_value[30d])", "refId": "A" } ] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "energy_value", "refId": "A" } ] },
 
-    { "id": 13, "type": "stat", "title": "Consumed (24h) ≈", "gridPos": { "h": 4, "w": 4, "x": 8, "y": 8 },
+    { "id": 13, "type": "stat", "title": "Consumed today", "gridPos": { "h": 4, "w": 4, "x": 8, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
       "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
-      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "integrate(inverter_ac_output_active_power[24h]) / 3600000", "refId": "A" } ] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "energymeter_consumed_today", "refId": "A" } ] },
 
-    { "id": 14, "type": "stat", "title": "Consumed (30d) ≈", "gridPos": { "h": 4, "w": 4, "x": 12, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 1 }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
-      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "integrate(inverter_ac_output_active_power[30d]) / 3600000", "refId": "A" } ] },
-
-    { "id": 15, "type": "stat", "title": "From battery (24h) ≈", "gridPos": { "h": 4, "w": 4, "x": 16, "y": 8 },
+    { "id": 14, "type": "stat", "title": "From grid today", "gridPos": { "h": 4, "w": 4, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
       "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
-      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "integrate((inverter_battery_voltage * inverter_battery_discharge_current)[24h:2m]) / 3600000", "refId": "A" } ] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "energymeter_grid_today", "refId": "A" } ] },
 
-    { "id": 16, "type": "stat", "title": "Self-sufficiency (24h) ≈", "gridPos": { "h": 4, "w": 4, "x": 20, "y": 8 },
+    { "id": 15, "type": "stat", "title": "From battery today", "gridPos": { "h": 4, "w": 4, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "energymeter_battery_out_today", "refId": "A" } ] },
+
+    { "id": 16, "type": "stat", "title": "Self-sufficiency today", "gridPos": { "h": 4, "w": 4, "x": 20, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
       "fieldConfig": { "defaults": { "unit": "percent", "decimals": 0, "min": 0, "max": 100 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
-      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "clamp_max(100 * avg_over_time((inverter_pv_input_voltage * inverter_pv_input_current)[24h:2m]) / avg_over_time(inverter_ac_output_active_power[24h]), 100)", "refId": "A" } ] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "clamp_max(100 * energymeter_pv_today / energymeter_consumed_today, 100)", "refId": "A" } ] },
 
     { "id": 102, "type": "row", "title": "📊 Power by source", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 } },
 
