@@ -33,33 +33,12 @@ services:
     mem_limit: 96m
     depends_on: [victoriametrics]
 
-  grafana:
-    image: grafana/grafana-oss:latest
-    container_name: smartess-grafana
-    restart: unless-stopped
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
-      - GF_SERVER_ROOT_URL=${GF_ROOT_URL:-}
-      - GF_PANELS_DISABLE_SANITIZE_HTML=true    # allow the mode-switch buttons panel
-      - GF_AUTH_ANONYMOUS_ENABLED=true          # view the dashboard without login (LAN only, behind Caddy)
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_ANALYTICS_REPORTING_ENABLED=false
-      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
-      - GF_NEWS_NEWS_FEED_ENABLED=false
-    ports:
-      - "3001:3000"                    # published on the host; Caddy reverse-proxies to <pi-ip>:3001
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-    mem_limit: 256m
-    depends_on: [victoriametrics]
-    networks: [smartess]
+  # Grafana was removed — the poller now serves a lightweight built-in dashboard
+  # (web/index.html) that is far lighter on a Pi 3B+. The Grafana provisioning
+  # files remain under ./grafana/ if you ever want to re-add the service.
 
 volumes:
   vmdata:
-  grafana-data:
 
 networks:
   smartess:

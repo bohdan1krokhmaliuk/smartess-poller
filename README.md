@@ -10,6 +10,13 @@ LAN and **actively polls** the inverter with Voltronic PI30 commands (`QPIGS`, `
 often as you like (e.g. every 10 s), publishing the parsed values to MQTT for Home Assistant,
 Node-RED, Grafana, etc.
 
+## Screenshots
+
+![Dashboard](docs/dashboard.png)
+
+*(Built-in dashboard, rendered entirely in the browser. Drop your own capture at
+`docs/dashboard.png`.)*
+
 ## Why this exists
 
 The popular [`Paxy/SmartESS-proxy`](https://github.com/Paxy/SmartESS-proxy) is a **passive
@@ -211,8 +218,9 @@ Docker) — see [`dashboard/`](dashboard/). For the graphs on top you have two o
   browser, so the Pi does almost nothing. Includes live tiles, gauges, source/energy/battery/
   solar/grid/power-factor charts with a time picker, drag-zoom, crosshair tooltips, light/dark
   theme and a LOCAL/MIRROR switch. Lives in [`web/index.html`](web/index.html).
-- **Grafana** (heavier, ~200 MB) — the `dashboard/` compose also ships Grafana with
-  provisioned dashboards, if you prefer it. On a Pi 3B+ the built-in one is much lighter.
+- **Grafana** (heavier, ~200 MB) — provisioned Grafana dashboards still live under
+  `dashboard/grafana/` for reference, but Grafana is **no longer started** by the compose
+  file (the built-in dashboard replaces it on the Pi 3B+). Re-add the service if you want it.
 
 The poller's web server (config `control_port`, default `8899`) exposes:
 

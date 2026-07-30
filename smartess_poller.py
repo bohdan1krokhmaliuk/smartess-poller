@@ -99,6 +99,13 @@ QPIWS = bytes.fromhex("ff045150495753b4da0d")   # warning / fault status
 QET   = bytes.fromhex("ff0451455481b60d")       # total generated energy
 QID   = bytes.fromhex("ff04514944d6ea0d")       # serial number (static)
 QPIRI = bytes.fromhex("ff045150495249f8540d")   # rated information (static)
+QMN   = bytes.fromhex("ff04514d4ebb640d")       # model name (static)
+QPI   = bytes.fromhex("ff04515049beac0d")       # protocol id (static)
+QVFW  = bytes.fromhex("ff045156465762990d")     # main CPU firmware (static)
+QVFW3 = bytes.fromhex("ff045156465733d3d40d")   # secondary firmware (static)
+
+# device identity, filled as the static commands come in; served at /info
+INFO = {}
 
 # QPIGS fields, in order, per the Voltronic PI30 spec.
 QPIGS_FIELDS = [
@@ -432,6 +439,20 @@ def dispatch_reply(mc, topic, word, payload):
         publish_qpiri(mc, topic, txt)
     elif word == "QPIWS":
         publish_qpiws(mc, topic, txt)
+    elif word == "QID":
+        INFO["serial"] = txt
+        mc.publish(topic + "inverter_serial", txt, retain=True)
+    elif word == "QMN":
+        INFO["model"] = txt
+        mc.publish(topic + "inverter_model", txt, retain=True)
+    elif word == "QPI":
+        INFO["protocol"] = txt
+        mc.publish(topic + "inverter_protocol", txt, retain=True)
+    elif word == "QVFW":
+        INFO["firmware"] = txt.replace("VERFW:", "")
+        mc.publish(topic + "inverter_firmware", INFO["firmware"], retain=True)
+    elif word == "QVFW3":
+        INFO["firmware2"] = txt.replace("VERFW:", "")
 
 
 # ------------------------------------------------------------------------- session
@@ -448,18 +469,12 @@ def handle_fakeclient(sock, mc, cfg):
         pass
 
     # static info, published once per connection
-    try:
-        sid = voltronic_text(request(sock, reader, QID))
-        if sid:
-            mc.publish(topic + "inverter_serial", sid, retain=True)
-    except Exception:
-        pass
-    try:
-        rated = voltronic_text(request(sock, reader, QPIRI))
-        if rated and rated[:1].isdigit():
-            publish_qpiri(mc, topic, rated)
-    except Exception:
-        pass
+    for word, cmd in (("QID", QID), ("QMN", QMN), ("QPI", QPI),
+                      ("QVFW", QVFW), ("QVFW3", QVFW3), ("QPIRI", QPIRI)):
+        try:
+            dispatch_reply(mc, topic, word, request(sock, reader, cmd))
+        except Exception:
+            pass
 
     last_keepalive = time.time()
     last_energy = 0.0
@@ -632,6 +647,10 @@ def start_control_server(port, state, state_lock, set_mode):
                     self._reply(200, ctype, body)
                 except Exception as e:
                     self._reply(502, "application/json", json.dumps({"error": str(e)}))
+                return
+
+            if path == "/info":
+                self._reply(200, "application/json", json.dumps(INFO))
                 return
 
             if path in ("/", "/index.html"):
