@@ -34,6 +34,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.request
 
 try:
     import paho.mqtt.client as mqtt
@@ -580,46 +581,75 @@ def handle_passthrough(dongle, mc, cfg, cloud):
 
 
 def start_control_server(port, state, state_lock, set_mode):
-    """Tiny HTTP endpoint so a dashboard button can toggle the mode:
-       GET /control/local | GET /control/mirror | GET /control (status page)."""
-    PAGE = (
-        "<!doctype html><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<style>body{{font-family:system-ui;background:#111;color:#eee;text-align:center;"
-        "padding:2rem}}a.btn{{display:inline-block;margin:.4rem;padding:.8rem 1.2rem;"
-        "border-radius:.5rem;text-decoration:none;color:#fff}}.local{{background:#2563eb}}"
-        ".mirror{{background:#059669}}.cur{{font-size:1.3rem;margin:1rem}}</style>"
-        "<div class=cur>Mode: <b>{mode}</b></div>{msg}"
-        "<div><a class='btn local' href='/control/local'>LOCAL &mdash; fast logging</a>"
-        "<a class='btn mirror' href='/control/mirror'>MIRROR &mdash; app works</a></div>"
-        "<p><a style='color:#888' href='/'>&larr; dashboard</a></p>")
+    """Lightweight web server: serves the static dashboard (web/index.html),
+    proxies read-only VictoriaMetrics queries (/vm/...), and toggles the mode
+    (/control/<mode>, returns JSON). One process, no extra services."""
+    web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+    VM_URL = os.environ.get("SMARTESS_VM_URL", "http://127.0.0.1:8428")
+
+    def vm_allowed(p):
+        return (p.startswith("/api/v1/query") or p.startswith("/api/v1/label")
+                or p.startswith("/api/v1/series"))
 
     class Handler(http.server.BaseHTTPRequestHandler):
-        def _send(self, msg=""):
-            with state_lock:
-                cur = state["mode"]
-            body = PAGE.format(mode=cur, msg=msg).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+        def _reply(self, code, ctype, body):
+            if isinstance(body, str):
+                body = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except Exception:
+                pass
 
         def do_GET(self):
-            path = self.path.split("?")[0].rstrip("/")
-            if path.endswith("/control/local") or path.endswith("/control/mirror"):
-                val = path.rsplit("/", 1)[1]
-                set_mode(val, "http")
-                self._send("<p>Switched to <b>%s</b>. Reconnect can take up to ~2 min.</p>" % val)
-            else:
-                self._send()
+            raw = self.path
+            path = raw.split("?", 1)[0]
+            query = raw.split("?", 1)[1] if "?" in raw else ""
+            p = path.rstrip("/")
+
+            if p.endswith("/control/local") or p.endswith("/control/mirror"):
+                set_mode(p.rsplit("/", 1)[1], "http")
+            if p.endswith("/control/local") or p.endswith("/control/mirror") or p.endswith("/control"):
+                with state_lock:
+                    cur = state["mode"]
+                self._reply(200, "application/json", json.dumps({"mode": cur}))
+                return
+
+            if path.startswith("/vm/"):
+                vmpath = path[3:]                      # strip '/vm', keep leading '/'
+                if not vm_allowed(vmpath):
+                    self._reply(403, "text/plain", "forbidden")
+                    return
+                url = VM_URL + vmpath + (("?" + query) if query else "")
+                try:
+                    with urllib.request.urlopen(url, timeout=25) as r:
+                        body = r.read()
+                        ctype = r.headers.get("Content-Type", "application/json")
+                    self._reply(200, ctype, body)
+                except Exception as e:
+                    self._reply(502, "application/json", json.dumps({"error": str(e)}))
+                return
+
+            if path in ("/", "/index.html"):
+                try:
+                    with open(os.path.join(web_dir, "index.html"), "rb") as f:
+                        self._reply(200, "text/html; charset=utf-8", f.read())
+                except Exception:
+                    self._reply(404, "text/plain", "dashboard not found (web/index.html)")
+                return
+
+            self._reply(404, "text/plain", "not found")
 
         def log_message(self, *args):
             pass
 
     httpd = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    print("HTTP control on 0.0.0.0:%d  (/control/local, /control/mirror)" % port)
+    print("Web server on 0.0.0.0:%d  (dashboard /, /vm proxy, /control/<mode>)" % port)
 
 
 def main():

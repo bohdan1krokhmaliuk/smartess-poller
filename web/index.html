@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Inverter</title>
+<style>
+:root{
+  --bg:#f4f6fb; --panel:#ffffff; --panel2:#eef1f7; --text:#0f172a; --muted:#64748b;
+  --border:#e2e8f0; --grid:#e7ebf3; --accent:#2563eb; --good:#16a34a; --warn:#f59e0b; --bad:#dc2626;
+  --shadow:0 1px 3px rgba(15,23,42,.08),0 1px 2px rgba(15,23,42,.04);
+}
+:root[data-theme=dark]{
+  --bg:#0b1020; --panel:#111829; --panel2:#0e1524; --text:#e6ebf5; --muted:#8896ad;
+  --border:#1e293b; --grid:#1b2437; --accent:#3b82f6; --good:#22c55e; --warn:#eab308; --bad:#ef4444;
+  --shadow:0 1px 3px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme]){ color-scheme:dark;
+  --bg:#0b1020; --panel:#111829; --panel2:#0e1524; --text:#e6ebf5; --muted:#8896ad;
+  --border:#1e293b; --grid:#1b2437; --accent:#3b82f6; --good:#22c55e; --warn:#eab308; --bad:#ef4444;
+  --shadow:0 1px 3px rgba(0,0,0,.4);
+}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,system-ui,sans-serif;
+  background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; padding-bottom:2rem}
+header{position:sticky; top:0; z-index:20; background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:saturate(150%) blur(8px); border-bottom:1px solid var(--border);
+  padding:.55rem clamp(.6rem,2vw,1.2rem); display:flex; flex-wrap:wrap; gap:.5rem .8rem; align-items:center}
+.brand{font-weight:700; font-size:1.05rem; margin-right:.4rem; display:flex; align-items:center; gap:.4rem}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px color-mix(in srgb,var(--good) 25%,transparent)}
+.brand .dot.stale{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 25%,transparent)}
+.spacer{flex:1 1 auto}
+.seg{display:inline-flex; background:var(--panel2); border:1px solid var(--border); border-radius:.6rem; overflow:hidden}
+.seg button{appearance:none; border:0; background:transparent; color:var(--muted); padding:.34rem .6rem;
+  font-size:.82rem; cursor:pointer; font-weight:600}
+.seg button.on{background:var(--accent); color:#fff}
+.seg button:hover:not(.on){color:var(--text)}
+.iconbtn{appearance:none; border:1px solid var(--border); background:var(--panel); color:var(--text);
+  width:34px;height:32px; border-radius:.55rem; cursor:pointer; font-size:1rem; line-height:1}
+.mode{display:inline-flex; align-items:center; gap:.35rem; font-size:.82rem; color:var(--muted)}
+.badge{padding:.24rem .55rem; border-radius:.5rem; font-weight:700; font-size:.78rem; color:#fff; letter-spacing:.02em}
+.badge.local{background:var(--accent)} .badge.mirror{background:var(--good)} .badge.unknown{background:var(--muted)}
+.modebtn{appearance:none;border:1px solid var(--border);background:var(--panel);color:var(--text);
+  padding:.28rem .5rem;border-radius:.5rem;font-size:.76rem;font-weight:600;cursor:pointer}
+.modebtn:hover{border-color:var(--accent)}
+main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
+.section{margin:1.1rem 0 .5rem; font-size:.82rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.06em}
+.grid{display:grid; grid-template-columns:repeat(12,1fr); gap:.7rem}
+.card{grid-column:span 3; background:var(--panel); border:1px solid var(--border); border-radius:.8rem;
+  box-shadow:var(--shadow); padding:.7rem .8rem; min-width:0; position:relative}
+.card h3{margin:0 0 .3rem; font-size:.78rem; font-weight:600; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.card .val{font-size:clamp(1.3rem,2.4vw,1.9rem); font-weight:700; line-height:1.1}
+.card .val small{font-size:.55em; font-weight:600; color:var(--muted); margin-left:.15em}
+.card.chart{grid-column:span 6}
+.chartwrap{position:relative; width:100%; height:200px; touch-action:none}
+.chartwrap canvas{position:absolute; inset:0; width:100%; height:100%}
+.legend{display:flex; flex-wrap:wrap; gap:.15rem .8rem; margin-top:.3rem; font-size:.72rem; color:var(--muted)}
+.legend span{display:inline-flex; align-items:center; gap:.3rem}
+.legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.tip{position:absolute; pointer-events:none; background:var(--panel); border:1px solid var(--border);
+  border-radius:.5rem; padding:.4rem .55rem; font-size:.72rem; box-shadow:var(--shadow); z-index:5; opacity:0; transition:opacity .08s; min-width:110px}
+.tip b{color:var(--text)} .tip .t{color:var(--muted); margin-bottom:.25rem}
+.tip .row{display:flex; justify-content:space-between; gap:.8rem}
+.gauge{display:flex; flex-direction:column; align-items:center; justify-content:center}
+.gauge svg{width:100%; max-width:150px; height:auto}
+.err{color:var(--bad); font-size:.75rem}
+@media (max-width:820px){
+  .card{grid-column:span 6 !important}
+  .card.chart{grid-column:span 12 !important}
+}
+@media (max-width:480px){
+  .card{grid-column:span 6 !important}
+  .brand{font-size:.95rem}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="freshDot"></span> Inverter</div>
+  <div class="mode">
+    <span class="badge unknown" id="modeBadge">…</span>
+    <button class="modebtn" data-mode="local" title="Fast 10s logging (app offline)">LOCAL</button>
+    <button class="modebtn" data-mode="mirror" title="SmartESS app works">MIRROR</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="seg" id="presets">
+    <button data-dur="900">15m</button>
+    <button data-dur="3600">1h</button>
+    <button data-dur="21600" class="on">6h</button>
+    <button data-dur="86400">24h</button>
+    <button data-dur="604800">7d</button>
+    <button data-dur="2592000">30d</button>
+  </div>
+  <button class="iconbtn" id="zoomOut" title="Zoom out">−</button>
+  <div class="seg" id="refreshSel">
+    <button data-ms="0">⏸</button>
+    <button data-ms="10000">10s</button>
+    <button data-ms="30000" class="on">30s</button>
+    <button data-ms="60000">1m</button>
+  </div>
+  <button class="iconbtn" id="refreshNow" title="Refresh now">⟳</button>
+  <button class="iconbtn" id="themeBtn" title="Toggle theme">🌙</button>
+</header>
+<main id="main"></main>
+
+<script>
+"use strict";
+const VM = "/vm/api/v1";
+const PALETTE = ["#3b82f6","#22c55e","#f59e0b","#ef4444","#a855f7","#06b6d4","#eab308","#ec4899","#14b8a6"];
+
+// ---- expressions (MetricsQL, evaluated by VictoriaMetrics) ----
+const E = {
+  soc:"inverter_battery_capacity", loadpct:"inverter_output_load_percent",
+  batV:"inverter_battery_voltage", load:"inverter_ac_output_active_power",
+  apparent:"inverter_ac_output_apparent_power",
+  pvpow:"inverter_pv_input_voltage * inverter_pv_input_current",
+  pvV:"inverter_pv_input_voltage", pvA:"inverter_pv_input_current", pvchg:"inverter_pv_charging_power",
+  gridV:"inverter_grid_voltage", outV:"inverter_ac_output_voltage", busV:"inverter_bus_voltage",
+  gridHz:"inverter_grid_frequency", outHz:"inverter_ac_output_frequency",
+  temp:"inverter_heatsink_temperature",
+  chg:"inverter_battery_charge_current", dis:"inverter_battery_discharge_current",
+  netbat:"inverter_battery_voltage * (inverter_battery_charge_current - inverter_battery_discharge_current)",
+  grid:"clamp_min(inverter_ac_output_active_power + (inverter_battery_voltage*inverter_battery_charge_current) - (inverter_pv_input_voltage*inverter_pv_input_current) - (inverter_battery_voltage*inverter_battery_discharge_current),0)",
+  battdis:"inverter_battery_voltage * inverter_battery_discharge_current",
+  selfnow:"clamp_max(100*(inverter_pv_input_voltage*inverter_pv_input_current)/inverter_ac_output_active_power,100)",
+  pf:"inverter_ac_output_active_power / inverter_ac_output_apparent_power",
+  mode:"mode_value", fault:"fault_value",
+  peakLoad:"max_over_time(inverter_ac_output_active_power[24h])",
+  pvPeak:"max_over_time((inverter_pv_input_voltage*inverter_pv_input_current)[24h:2m])",
+  minSoc:"min_over_time(inverter_battery_capacity[24h])",
+  uptime:"avg_over_time((inverter_grid_voltage > bool 50)[24h:1m])*100",
+  avg1h:"avg_over_time(inverter_ac_output_active_power[1h])",
+  avg24h:"avg_over_time(inverter_ac_output_active_power[24h])",
+  eGen:"energymeter_pv_today", eCons:"energymeter_consumed_today",
+  eBat:"energymeter_battery_out_today", eGrid:"energymeter_grid_today",
+  eSelf:"clamp_max(100*energymeter_pv_today/energymeter_consumed_today,100)",
+  ePvTot:"energy_value",
+};
+const MODE_MAP = {0:["PowerOn","var(--accent)"],1:["Standby","var(--warn)"],2:["Line","var(--good)"],
+  3:["Battery","var(--accent)"],4:["Fault","var(--bad)"],5:["PowerSaving","var(--warn)"],6:["Shutdown","var(--muted)"],7:["Bypass","var(--warn)"]};
+const FAULT_MAP = {0:["OK","var(--good)"],1:["FAULT","var(--bad)"]};
+
+// ---- dashboard config ----
+const SECTIONS = [
+ {name:"⚡ Now", panels:[
+   {t:"gauge",title:"Battery SoC",expr:E.soc,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[20,"var(--warn)"],[50,"var(--good)"]]},
+   {t:"gauge",title:"Load",expr:E.loadpct,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]]},
+   {t:"stat",title:"Battery",expr:E.batV,unit:"V",dec:2,span:2},
+   {t:"stat",title:"Load",expr:E.load,unit:"W",span:2},
+   {t:"stat",title:"PV power",expr:E.pvpow,unit:"W",span:2},
+   {t:"stat",title:"Grid",expr:E.gridV,unit:"V",dec:1,span:2,th:[[0,"var(--bad)"],[50,"var(--good)"]]},
+   {t:"stat",title:"Heatsink",expr:E.temp,unit:"°C",span:2,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
+   {t:"stat",title:"Mode",expr:E.mode,map:MODE_MAP,span:2},
+   {t:"stat",title:"Status",expr:E.fault,map:FAULT_MAP,span:2},
+   {t:"stat",title:"Peak load 24h",expr:E.peakLoad,unit:"W",span:2},
+ ]},
+ {name:"🔋 Energy · today", panels:[
+   {t:"stat",title:"Generated",expr:E.eGen,unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"Consumed",expr:E.eCons,unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"From battery",expr:E.eBat,unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"From grid",expr:E.eGrid,unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"Self-sufficiency",expr:E.eSelf,unit:"%",dec:0,span:2,th:[[0,"var(--warn)"],[50,"var(--good)"]]},
+   {t:"stat",title:"PV total (life)",expr:E.ePvTot,unit:"kWh",dec:1,span:2},
+ ]},
+ {name:"📊 Power by source", panels:[
+   {t:"chart",title:"Sources → load (W)",unit:"W",span:8,series:[
+     {expr:E.pvpow,label:"solar",color:"#f59e0b",fill:true,stack:true},
+     {expr:E.battdis,label:"battery",color:"#22c55e",fill:true,stack:true},
+     {expr:E.grid,label:"grid",color:"#3b82f6",fill:true,stack:true},
+     {expr:E.load,label:"load",color:"var(--text)",width:2}]},
+   {t:"chart",title:"Self-sufficiency %",unit:"%",min:0,max:100,span:4,series:[{expr:E.selfnow,label:"PV coverage",color:"#22c55e",fill:true}]},
+   {t:"chart",title:"Output power",unit:"W",span:6,series:[
+     {expr:E.load,label:"active",color:"#3b82f6"},{expr:E.apparent,label:"apparent",color:"#a855f7"}]},
+   {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:E.loadpct,label:"load",color:"#f59e0b",fill:true}]},
+ ]},
+ {name:"🔋 Battery", panels:[
+   {t:"chart",title:"SoC & voltage",span:6,series:[
+     {expr:E.batV,label:"voltage",color:"#3b82f6",unit:"V"},
+     {expr:E.soc,label:"SoC",color:"#22c55e",unit:"%",axis:"right",min:0,max:100}]},
+   {t:"chart",title:"Charge / discharge current",unit:"A",span:6,series:[
+     {expr:E.chg,label:"charge",color:"#22c55e"},{expr:E.dis,label:"discharge",color:"#ef4444"}]},
+   {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:12,series:[{expr:E.netbat,label:"net",color:"#06b6d4",fill:true}]},
+ ]},
+ {name:"☀️ Solar", panels:[
+   {t:"chart",title:"PV voltage / current / power",span:9,series:[
+     {expr:E.pvV,label:"voltage",color:"#3b82f6",unit:"V"},
+     {expr:E.pvA,label:"current",color:"#22c55e",unit:"A"},
+     {expr:E.pvpow,label:"power",color:"#f59e0b",unit:"W",axis:"right"}]},
+   {t:"stat",title:"PV peak 24h",expr:E.pvPeak,unit:"W",span:3},
+ ]},
+ {name:"🔗 Grid & output", panels:[
+   {t:"chart",title:"Voltages (grid / output / bus)",unit:"V",span:6,series:[
+     {expr:E.gridV,label:"grid",color:"#3b82f6"},{expr:E.outV,label:"output",color:"#22c55e"},{expr:E.busV,label:"bus",color:"#a855f7"}]},
+   {t:"chart",title:"Frequencies",unit:"Hz",dec:2,span:3,series:[
+     {expr:E.gridHz,label:"grid",color:"#3b82f6"},{expr:E.outHz,label:"output",color:"#22c55e"}]},
+   {t:"stat",title:"Grid uptime 24h",expr:E.uptime,unit:"%",dec:1,span:3,th:[[0,"var(--bad)"],[80,"var(--warn)"],[98,"var(--good)"]]},
+ ]},
+ {name:"🔎 Power quality", panels:[
+   {t:"stat",title:"Power factor now",expr:E.pf,unit:"",dec:2,span:3,th:[[0,"var(--bad)"],[0.7,"var(--warn)"],[0.9,"var(--good)"]]},
+   {t:"chart",title:"Power factor",unit:"",min:0,max:1,dec:2,span:9,series:[{expr:E.pf,label:"PF",color:"#06b6d4",fill:true}]},
+ ]},
+ {name:"🌡️ Health & averages", panels:[
+   {t:"chart",title:"Heatsink temperature",unit:"°C",span:6,series:[{expr:E.temp,label:"temp",color:"#ef4444",fill:true}]},
+   {t:"chart",title:"Average load (1h / 24h)",unit:"W",span:4,series:[
+     {expr:E.avg1h,label:"avg 1h",color:"#3b82f6"},{expr:E.avg24h,label:"avg 24h",color:"#a855f7"}]},
+   {t:"stat",title:"Min SoC 24h",expr:E.minSoc,unit:"%",span:2,th:[[0,"var(--bad)"],[20,"var(--warn)"],[40,"var(--good)"]]},
+ ]},
+];
+
+// ---- helpers ----
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function resolveColor(c){ return c && c.startsWith("var(") ? cssVar(c.slice(4,-1)) : c; }
+function fmt(v,unit,dec){
+  if(v==null||!isFinite(v)) return "—";
+  let u=unit||"";
+  if(u==="W"&&Math.abs(v)>=1000){ return (v/1000).toFixed(dec??2)+" kW"; }
+  if(u==="kWh"){ return v.toFixed(dec??2)+" kWh"; }
+  if(u==="%"){ return v.toFixed(dec??0)+" %"; }
+  if(u==="°C"){ return v.toFixed(dec??0)+" °C"; }
+  if(u==="V"){ return v.toFixed(dec??1)+" V"; }
+  if(u==="A"){ return v.toFixed(dec??1)+" A"; }
+  if(u==="Hz"){ return v.toFixed(dec??2)+" Hz"; }
+  if(u==="W"){ return Math.round(v)+" W"; }
+  return (dec!=null?v.toFixed(dec):(""+ (Math.round(v*100)/100)));
+}
+function thColor(v,th){ let c=null; if(!th)return null; for(const [t,col] of th){ if(v>=t)c=col; } return c; }
+
+async function qInstant(expr,at){
+  const u=`${VM}/query?query=${encodeURIComponent(expr)}&time=${Math.round(at/1000)}`;
+  const r=await fetch(u); const j=await r.json();
+  const res=j.data&&j.data.result; if(!res||!res.length) return null;
+  return parseFloat(res[0].value[1]);
+}
+async function qRange(expr,from,to,step){
+  const u=`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${step}`;
+  const r=await fetch(u); const j=await r.json();
+  const res=j.data&&j.data.result; if(!res||!res.length) return [];
+  let best=res[0]; for(const s of res){ if(s.values.length>best.values.length) best=s; }
+  return best.values.map(p=>[p[0]*1000, parseFloat(p[1])]);
+}
+
+// ---- time range state ----
+const state={ dur:21600*1000, abs:null, autoMs:30000, timer:null };
+function range(){ if(state.abs) return state.abs; const to=Date.now(); return {from:to-state.dur,to}; }
+function step(){ const {from,to}=range(); return Math.max(10, Math.round((to-from)/1000/400)); }
+
+// ---- gauge ----
+function gaugeSVG(el,v,min,max,unit,dec,th){
+  const size=150,cx=75,cy=78,r=58,a0=-220,a1=40;
+  const frac=Math.max(0,Math.min(1,(v-min)/(max-min)));
+  const col=resolveColor(thColor(v,th)||"var(--accent)");
+  function pt(ang){ const a=ang*Math.PI/180; return [cx+r*Math.cos(a), cy+r*Math.sin(a)]; }
+  function arc(from,to){ const [x0,y0]=pt(from),[x1,y1]=pt(to); const large=(to-from)>180?1:0; return `M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}`; }
+  const va=a0+(a1-a0)*frac;
+  el.innerHTML=`<svg viewBox="0 0 150 118">
+    <path d="${arc(a0,a1)}" fill="none" stroke="${cssVar('--grid')}" stroke-width="11" stroke-linecap="round"/>
+    <path d="${arc(a0,va)}" fill="none" stroke="${col}" stroke-width="11" stroke-linecap="round"/>
+    <text x="75" y="72" text-anchor="middle" font-size="26" font-weight="700" fill="${cssVar('--text')}">${v==null?'—':(dec!=null?v.toFixed(dec):Math.round(v))}</text>
+    <text x="75" y="92" text-anchor="middle" font-size="12" fill="${cssVar('--muted')}">${unit||''}</text>
+  </svg>`;
+}
+
+// ---- chart ----
+class Chart{
+  constructor(wrap,panel){ this.wrap=wrap; this.p=panel;
+    this.base=document.createElement("canvas"); this.ov=document.createElement("canvas");
+    this.tip=document.createElement("div"); this.tip.className="tip";
+    wrap.append(this.base,this.ov,this.tip);
+    this.series=[]; this.hover=null; this.drag=null;
+    this.ov.addEventListener("pointermove",e=>this.onMove(e));
+    this.ov.addEventListener("pointerleave",()=>{this.hover=null;this.tip.style.opacity=0;this.drawOv();});
+    this.ov.addEventListener("pointerdown",e=>{this.ov.setPointerCapture(e.pointerId);this.drag={x0:this.mx(e),x1:this.mx(e)};});
+    this.ov.addEventListener("pointerup",e=>{ if(this.drag){ const a=this.geom(); const t0=this.xToT(this.drag.x0),t1=this.xToT(this.drag.x1);
+      this.drag=null; if(Math.abs(t1-t0)>5000){ setAbs(Math.min(t0,t1),Math.max(t0,t1)); } this.drawOv(); }});
+    this.ov.addEventListener("dblclick",()=>{ setPreset(state.dur); });
+  }
+  mx(e){ const r=this.base.getBoundingClientRect(); return e.clientX-r.left; }
+  geom(){ const w=this.base.clientWidth,h=this.base.clientHeight;
+    const hasR=this.series.some(s=>s.axis==="right");
+    return {w,h,pl:46,pr:hasR?46:12,pt:8,pb:20, hasR}; }
+  setData(series){ this.series=series; this.draw(); }
+  scales(){ const g=this.geom(); const {from,to}=range();
+    const L=this.series.filter(s=>s.axis!=="right"), R=this.series.filter(s=>s.axis==="right");
+    const rng=(arr,pmin,pmax)=>{ let mn=Infinity,mx=-Infinity;
+      arr.forEach(s=>{ (s.stacked||s.pts).forEach(pt=>{const v=pt[1]; if(isFinite(v)){if(v<mn)mn=v;if(v>mx)mx=v;}}); });
+      if(pmin!=null)mn=pmin; if(pmax!=null)mx=pmax;
+      if(!isFinite(mn)||!isFinite(mx)){mn=0;mx=1;} if(mn===mx){mx=mn+1;mn=Math.min(mn,0);}
+      if(pmin==null) mn=mn>0?0:mn*1.1; if(pmax==null) mx=mx*1.08; return [mn,mx]; };
+    const p=this.p; const [lmin,lmax]=rng(L,p.min,p.max);
+    const rp=R[0]||{}; const [rmin,rmax]=rng(R,rp.min,rp.max);
+    return {from,to,lmin,lmax,rmin,rmax,g};
+  }
+  xToT(x){ const g=this.geom(),{from,to}=range(); return from+(x-g.pl)/(g.w-g.pl-g.pr)*(to-from); }
+  draw(){ const c=this.base,dpr=devicePixelRatio||1; const w=c.clientWidth,h=c.clientHeight;
+    c.width=w*dpr;c.height=h*dpr;this.ov.width=w*dpr;this.ov.height=h*dpr;
+    const x=c.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,w,h);
+    const S=this.scales(),g=S.g;
+    const X=t=>g.pl+(t-S.from)/(S.to-S.from)*(w-g.pl-g.pr);
+    const YL=v=>g.pt+(1-(v-S.lmin)/(S.lmax-S.lmin))*(h-g.pt-g.pb);
+    const YR=v=>g.pt+(1-(v-S.rmin)/(S.rmax-S.rmin))*(h-g.pt-g.pb);
+    const grid=cssVar("--grid"),muted=cssVar("--muted");
+    x.font="10px -apple-system,system-ui,sans-serif";x.textBaseline="middle";
+    // y grid + labels (left)
+    const yt=niceTicks(S.lmin,S.lmax,4);
+    x.strokeStyle=grid;x.fillStyle=muted;x.lineWidth=1;
+    yt.forEach(v=>{const y=YL(v);x.beginPath();x.moveTo(g.pl,y);x.lineTo(w-g.pr,y);x.stroke();
+      x.textAlign="right";x.fillText(fmtAxis(v),g.pl-5,y);});
+    if(g.hasR){ const rt=niceTicks(S.rmin,S.rmax,4); x.textAlign="left"; rt.forEach(v=>{const y=YR(v);x.fillText(fmtAxis(v),w-g.pr+5,y);}); }
+    // x ticks
+    const xt=timeTicks(S.from,S.to); x.textAlign="center";x.textBaseline="top";
+    xt.forEach(tk=>{const px=X(tk.t);x.strokeStyle=grid;x.beginPath();x.moveTo(px,g.pt);x.lineTo(px,h-g.pb);x.stroke();
+      x.fillStyle=muted;x.fillText(tk.l,px,h-g.pb+4);});
+    // series
+    this.series.forEach(s=>{ const Y=s.axis==="right"?YR:YL; const pts=s.stacked||s.pts; if(!pts.length)return;
+      const col=resolveColor(s.color);
+      if(s.fill){ x.beginPath(); pts.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]); i?x.lineTo(px,py):x.moveTo(px,py);});
+        const base=s.baseline||null;
+        if(base){ for(let i=pts.length-1;i>=0;i--){x.lineTo(X(base[i][0]),Y(base[i][1]));} }
+        else{ x.lineTo(X(pts[pts.length-1][0]),YL(S.lmin<0?0:S.lmin)); x.lineTo(X(pts[0][0]),YL(S.lmin<0?0:S.lmin)); }
+        x.closePath(); x.fillStyle=hexA(col,.16); x.fill(); }
+      x.beginPath(); pts.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]); i?x.lineTo(px,py):x.moveTo(px,py);});
+      x.strokeStyle=col;x.lineWidth=s.width||1.4;x.lineJoin="round";x.stroke();
+    });
+    this._X=X;this._YL=YL;this._YR=YR;this._S=S; this.drawOv();
+  }
+  drawOv(){ const c=this.ov,dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
+    const x=c.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,w,h);
+    const g=this.geom();
+    if(this.drag){ const a=Math.min(this.drag.x0,this.drag.x1),b=Math.max(this.drag.x0,this.drag.x1);
+      x.fillStyle=hexA(resolveColor("var(--accent)"),.15);x.fillRect(a,g.pt,b-a,h-g.pt-g.pb); return; }
+    if(this.hover!=null&&this._X){ const px=this.hover; x.strokeStyle=cssVar("--muted");x.lineWidth=1;
+      x.setLineDash([4,3]);x.beginPath();x.moveTo(px,g.pt);x.lineTo(px,h-g.pb);x.stroke();x.setLineDash([]); }
+  }
+  onMove(e){ if(!this._X)return; const mx=this.mx(e);
+    if(this.drag){ this.drag.x1=mx; this.drawOv(); return; }
+    const t=this.xToT(mx); let nt=null,nd=1e15;
+    (this.series[0]&&this.series[0].pts||[]).forEach(p=>{const d=Math.abs(p[0]-t); if(d<nd){nd=d;nt=p[0];}});
+    if(nt==null){this.tip.style.opacity=0;return;}
+    this.hover=this._X(nt); this.drawOv();
+    let rows=this.series.map(s=>{ const p=(s.pts).find(q=>q[0]===nt); const v=p?p[1]:null;
+      return `<div class="row"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${resolveColor(s.color)}"></i> ${s.label}</span><b>${fmt(v,s.unit||this.p.unit,s.dec??this.p.dec)}</b></div>`; }).join("");
+    this.tip.innerHTML=`<div class="t">${new Date(nt).toLocaleString()}</div>${rows}`;
+    this.tip.style.opacity=1;
+    const r=this.wrap.getBoundingClientRect(); let left=this.hover+12; if(left>r.width-130)left=this.hover-130;
+    this.tip.style.left=Math.max(4,left)+"px"; this.tip.style.top="6px";
+  }
+}
+function hexA(c,a){ // color -> rgba
+  if(c.startsWith("#")){ const n=c.length===4?c.replace(/#(.)(.)(.)/,"#$1$1$2$2$3$3"):c;
+    const r=parseInt(n.slice(1,3),16),g=parseInt(n.slice(3,5),16),b=parseInt(n.slice(5,7),16); return `rgba(${r},${g},${b},${a})`; }
+  return c;
+}
+function niceTicks(mn,mx,n){ if(mn===mx)return[mn]; const span=mx-mn,raw=span/n,mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const norm=raw/mag; let s=(norm>=5?5:norm>=2?2:1)*mag; const out=[]; let v=Math.ceil(mn/s)*s;
+  for(;v<=mx+1e-9;v+=s) out.push(Math.round(v/s)*s); return out.length?out:[mn,mx]; }
+function fmtAxis(v){ const a=Math.abs(v); if(a>=1000)return (v/1000).toFixed(a>=10000?0:1)+"k"; if(a<1&&a>0)return v.toFixed(2); return (Math.round(v*100)/100).toString(); }
+function timeTicks(from,to){ const span=to-from,out=[]; const steps=[60e3,300e3,900e3,3600e3,3*3600e3,6*3600e3,12*3600e3,24*3600e3,7*24*3600e3];
+  let s=steps[steps.length-1]; for(const st of steps){ if(span/st<=7){s=st;break;} }
+  let v=Math.ceil(from/s)*s; for(;v<=to;v+=s){ out.push({t:v,l:fmtTick(v,span)}); } return out; }
+function fmtTick(t,span){ const d=new Date(t); const p=n=>String(n).padStart(2,"0");
+  if(span<=2*24*3600e3) return p(d.getHours())+":"+p(d.getMinutes());
+  return p(d.getDate())+"."+p(d.getMonth()+1); }
+
+// ---- build DOM ----
+const main=document.getElementById("main"); const cards=[];
+for(const sec of SECTIONS){ const h=document.createElement("div"); h.className="section"; h.textContent=sec.name; main.append(h);
+  const grid=document.createElement("div"); grid.className="grid"; main.append(grid);
+  for(const p of sec.panels){ const card=document.createElement("div");
+    card.className="card"+(p.t==="chart"?" chart":""); card.style.gridColumn="span "+(p.span||3);
+    const title=document.createElement("h3"); title.textContent=p.title; card.append(title);
+    const body=document.createElement("div");
+    if(p.t==="chart"){ body.className="chartwrap"; card.append(body);
+      const leg=document.createElement("div"); leg.className="legend";
+      leg.innerHTML=p.series.map(s=>`<span><i style="background:${resolveColor(s.color)}"></i>${s.label}</span>`).join("");
+      const chart=new Chart(body,p); card.append(leg); cards.push({p,card,chart});
+    } else if(p.t==="gauge"){ body.className="gauge"; card.append(body); cards.push({p,card,el:body}); }
+    else { body.className="val"; body.textContent="—"; card.append(body); cards.push({p,card,el:body}); }
+    grid.append(card);
+  }
+}
+
+// ---- refresh ----
+async function refresh(){
+  const now=Date.now(),{from,to}=range(),st=step();
+  await Promise.all(cards.map(async c=>{ const p=c.p;
+    try{
+      if(p.t==="stat"){ const v=await qInstant(p.expr,to);
+        if(p.map){ const m=p.map[Math.round(v)]; c.el.innerHTML=m?`<span style="color:${resolveColor(m[1])}">${m[0]}</span>`:"—"; }
+        else{ c.el.innerHTML=fmt(v,p.unit,p.dec); const col=thColor(v,p.th); c.el.style.color=col?resolveColor(col):""; }
+      } else if(p.t==="gauge"){ const v=await qInstant(p.expr,to); gaugeSVG(c.el,v,p.min,p.max,p.unit,p.dec,p.th); }
+      else { const series=await Promise.all(p.series.map(async s=>({...s, pts:await qRange(s.expr,from,to,st)})));
+        // stacking
+        const stackables=series.filter(s=>s.stack); let base=null;
+        stackables.forEach(s=>{ if(!base){ s.stacked=s.pts.map(p=>[p[0],p[1]]); }
+          else{ const bm=new Map(base.map(p=>[p[0],p[1]])); s.stacked=s.pts.map(p=>[p[0],(bm.get(p[0])||0)+p[1]]); s.baseline=base; }
+          base=s.stacked; });
+        c.chart.setData(series);
+      }
+    }catch(err){ if(p.t!=="chart"){ c.el.innerHTML='<span class="err">err</span>'; } }
+  }));
+  // freshness
+  try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",to);
+    document.getElementById("freshDot").className="dot"+(age>120?" stale":""); }catch(e){}
+  loadMode();
+}
+
+// ---- mode control ----
+async function loadMode(){ try{ const r=await fetch("/control"); const j=await r.json(); setBadge(j.mode); }catch(e){} }
+function setBadge(m){ const b=document.getElementById("modeBadge"); b.className="badge "+(m||"unknown"); b.textContent=(m||"?").toUpperCase(); }
+document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",async()=>{
+  const m=btn.dataset.mode; if(!confirm("Switch to "+m.toUpperCase()+"?\nReconnect can take up to ~2 min."))return;
+  try{ const r=await fetch("/control/"+m); const j=await r.json(); setBadge(j.mode); }catch(e){}
+}));
+
+// ---- controls ----
+function setPreset(dur){ state.dur=dur; state.abs=null;
+  document.querySelectorAll("#presets button").forEach(b=>b.classList.toggle("on",+b.dataset.dur*1000===dur)); redraw(); }
+function setAbs(from,to){ state.abs={from,to}; document.querySelectorAll("#presets button").forEach(b=>b.classList.remove("on")); redraw(); }
+function redraw(){ refresh(); }
+document.querySelectorAll("#presets button").forEach(b=>b.addEventListener("click",()=>setPreset(+b.dataset.dur*1000)));
+document.getElementById("zoomOut").addEventListener("click",()=>{ const {from,to}=range(),c=(from+to)/2,half=(to-from); setAbs(c-half,c+half); });
+document.getElementById("refreshNow").addEventListener("click",refresh);
+document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+  state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs) state.timer=setInterval(refresh,state.autoMs); }));
+// theme
+function applyTheme(t){ if(t)document.documentElement.setAttribute("data-theme",t); else document.documentElement.removeAttribute("data-theme");
+  document.getElementById("themeBtn").textContent=(curTheme()==="dark")?"☀️":"🌙"; cards.forEach(c=>{ if(c.chart)c.chart.draw(); }); }
+function curTheme(){ return document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
+document.getElementById("themeBtn").addEventListener("click",()=>{ const t=curTheme()==="dark"?"light":"dark"; localStorage.setItem("theme",t); applyTheme(t); });
+const saved=localStorage.getItem("theme"); if(saved)applyTheme(saved); else applyTheme(null);
+
+// resize
+let rz; new ResizeObserver(()=>{ clearTimeout(rz); rz=setTimeout(()=>cards.forEach(c=>c.chart&&c.chart.draw()),120); }).observe(main);
+
+// go
+state.timer=setInterval(refresh,state.autoMs); refresh();
+</script>
+</body>
+</html>

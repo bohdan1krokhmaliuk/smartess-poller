@@ -200,20 +200,35 @@ mqtt:
       device_class: voltage
 ```
 
-## Dashboard (graphs)
+## Storage & graphs
 
-A ready-to-run, lightweight visualization stack (Grafana + VictoriaMetrics + Telegraf,
-all in Docker, sized for a Pi 3B+) lives in [`dashboard/`](dashboard/). It graphs the MQTT
-data and includes a **LOCAL / MIRROR** mode-switch panel wired to the poller's HTTP control
-endpoint. See [`dashboard/README.md`](dashboard/README.md).
+Store the MQTT data for history/analysis with **VictoriaMetrics + Telegraf** (tiny, in
+Docker) — see [`dashboard/`](dashboard/). For the graphs on top you have two options:
 
-## Mode-toggle HTTP endpoint
+- **Built-in web dashboard (recommended, ~0 RAM).** The poller itself serves a
+  self-contained dashboard (no third-party JS libraries) at `http://<pi>:<control_port>/`,
+  proxying read-only VictoriaMetrics queries under `/vm/…`. All rendering happens in your
+  browser, so the Pi does almost nothing. Includes live tiles, gauges, source/energy/battery/
+  solar/grid/power-factor charts with a time picker, drag-zoom, crosshair tooltips, light/dark
+  theme and a LOCAL/MIRROR switch. Lives in [`web/index.html`](web/index.html).
+- **Grafana** (heavier, ~200 MB) — the `dashboard/` compose also ships Grafana with
+  provisioned dashboards, if you prefer it. On a Pi 3B+ the built-in one is much lighter.
 
-Besides MQTT, the poller exposes a small HTTP control endpoint (config `control_port`,
-default `8899`) so a dashboard button (or a phone bookmark) can switch modes:
+The poller's web server (config `control_port`, default `8899`) exposes:
 
 ```
-GET /control/local     GET /control/mirror     GET /control   (status page)
+GET /                    the dashboard (web/index.html)
+GET /vm/api/v1/query…    read-only VictoriaMetrics proxy (query / query_range / labels)
+GET /control/local|mirror   switch mode (returns JSON); GET /control returns current mode
+```
+
+Front it with your existing Caddy:
+
+```caddy
+solar.bodka {
+    tls internal
+    reverse_proxy 192.168.68.68:8899
+}
 ```
 
 ## Notes & safety
