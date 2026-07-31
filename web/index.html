@@ -225,6 +225,19 @@ const SECTIONS=[
    {t:"chart",title:"Output power",unit:"W",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
    {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:M.loadpct,label:"load",color:C.cons,fill:1}]},
  ]},
+ {name:"☀️ Solar", panels:[
+   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#ef4444",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
+   {t:"multi",title:"Headroom",span:3,items:[
+     {label:"Available now",client:"availNow",unit:"W",color:"#3b82f6"},
+     {label:"Spare now",client:"spareNow",unit:"W",color:C.pv},
+     {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
+     {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
+     {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
+     {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
+   {t:"chart",pvhead:1,title:"Produced / available / unused (W)",unit:"W",span:9,series:[
+     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"}]},
+   {t:"sky",title:"Sun path & sky",span:3},
+ ]},
  {name:"🔋 Battery", panels:[
    {t:"multi",title:"Charging now",span:6,items:[
      {label:"Current",expr:M.chg,live:1,unit:"A",dec:1,color:"var(--good)"},
@@ -255,19 +268,6 @@ const SECTIONS=[
      {label:"MOSFET",expr:"bms_temp_mos",live:1,unit:"°C",dec:1,th:[[0,"var(--good)"],[55,"var(--warn)"],[75,"var(--bad)"]]}]},
    {t:"chart",title:"Cell spread (mV)",unit:"mV",span:3,series:[{expr:"bms_cell_delta*1000",label:"Δ",color:"#a855f7",fill:1}]},
    {t:"chart",title:"SoC & pack voltage",span:12,series:[{expr:"bms_pack_voltage",label:"voltage",color:"#3b82f6",unit:"V"},{expr:"bms_soc",label:"SoC",color:C.bat,unit:"%",axis:"right",min:0,max:100}]},
- ]},
- {name:"☀️ Solar", panels:[
-   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#ef4444",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
-   {t:"multi",title:"Headroom",span:3,items:[
-     {label:"Available now",client:"availNow",unit:"W",color:"#3b82f6"},
-     {label:"Spare now",client:"spareNow",unit:"W",color:C.pv},
-     {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
-     {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
-     {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
-     {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
-   {t:"chart",pvhead:1,title:"Produced / available / unused (W)",unit:"W",span:9,series:[
-     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"}]},
-   {t:"sky",title:"Sun path & sky",span:3},
  ]},
  {name:"📈 History & state", panels:[
    {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
