@@ -186,6 +186,14 @@ else refreshes every `poll_interval` (energy at most once a minute).
 All values are published with the MQTT `retain` flag, so new subscribers get the last value
 immediately.
 
+## Battery BMS (optional)
+
+If your battery has a **JK BMS** with Bluetooth, [`bms/`](bms/) reads it over BLE
+(per-cell voltages, true SoC, SoH, temperatures, cycles) using the Pi's built-in
+Bluetooth — no extra hardware — and publishes to `smartess/bms_json`, the same
+MQTT → Telegraf → VictoriaMetrics path as the inverter. See
+[bms/README.md](bms/README.md).
+
 ## Home Assistant
 
 MQTT sensors example:

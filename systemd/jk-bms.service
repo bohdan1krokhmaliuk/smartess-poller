@@ -1,0 +1,18 @@
+[Unit]
+Description=JK BMS BLE reader (Bluetooth -> MQTT)
+After=network-online.target mosquitto.service bluetooth.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace /path/to with the absolute path to the cloned repo, e.g. /home/pi/smartess-poller
+WorkingDirectory=/path/to
+ExecStart=/usr/bin/python3 /path/to/bms/jk_bms.py
+Restart=always
+RestartSec=10
+# BLE via BlueZ works when run as root. For a non-root user, add that account to
+# the 'bluetooth' group instead and set User= accordingly.
+User=root
+
+[Install]
+WantedBy=multi-user.target
