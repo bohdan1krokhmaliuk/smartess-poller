@@ -89,7 +89,7 @@ def parse_cell_info(f):
 
 # ---- MQTT -------------------------------------------------------------
 enabled = True                 # manual on/off via smartess/bms_control
-last_inv = [0.0]               # time of the last live inverter frame (smartess/qpigs_json)
+last_inv = [time.time()]       # last live inverter frame; assume live at startup (grace period)
 INVERTER_TIMEOUT = 180         # stop reading the BMS if the inverter goes quiet this long
 
 
@@ -116,13 +116,18 @@ def _make_client():
         return mqtt.Client(client_id="jk-bms-ble")
 
 
+def _on_connect(c, _u, _flags, _rc):
+    c.subscribe(TOPIC + "bms_control")
+    c.subscribe(TOPIC + "qpigs_json")   # subscribe on connect so it survives broker reconnects
+    print("MQTT connected")
+
+
 mc = _make_client()
 if MQTT_USER:
     mc.username_pw_set(MQTT_USER, MQTT_PASS)
+mc.on_connect = _on_connect
 mc.on_message = _on_msg
 mc.connect(MQTT_HOST, MQTT_PORT, 60)
-mc.subscribe(TOPIC + "bms_control")
-mc.subscribe(TOPIC + "qpigs_json")     # watch the inverter's liveness
 mc.loop_start()
 
 
