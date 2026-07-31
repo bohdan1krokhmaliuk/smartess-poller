@@ -192,7 +192,7 @@ const SECTIONS=[
  {name:"⚡ Now", panels:[
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
    {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",maxSetting:"pvmax",span:3,th:[[0,C.pv]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"peak "}},
-   {t:"gauge2",title:"Battery SoC",span:6,gauges:[
+   {t:"gauge2",title:"Battery SoC",span:3,gauges:[
      {label:"Inverter",expr:M.soc,unit:"%",min:0,max:100,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,unit:"V",dec:2}},
      {label:"BMS",expr:"bms_soc and (time()-timestamp(bms_soc) < 90)",unit:"%",min:0,max:100,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:"bms_pack_voltage",unit:"V",dec:2}}]},
    {t:"multi",title:"Status",span:3,items:[
@@ -537,8 +537,8 @@ function renderCells(c){ const vals=c.last||[];
       `<b style="width:50px;text-align:right;font-variant-numeric:tabular-nums">${v.toFixed(3)}</b></div>`; }).join("");
   c.el.innerHTML=h; }
 function renderGauge2(c){ const p=c.p, vals=c.last||[], subs=c.subv||[];   // two gauges side by side in one card
-  c.el.style.cssText="display:flex;gap:.6rem;align-items:flex-start;justify-content:center";
-  c.el.innerHTML=p.gauges.map((g,i)=>`<div class="gauge" style="flex:0 1 150px;max-width:150px;min-width:0"><div style="font-size:.62rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em">${g.label}</div><div class="g2s" data-i="${i}" style="width:100%"></div></div>`).join("");
+  c.el.style.cssText="display:flex;gap:.2rem;align-items:flex-start;justify-content:center";
+  c.el.innerHTML=p.gauges.map((g,i)=>`<div class="gauge" style="flex:1;min-width:0"><div style="font-size:.6rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.03em">${g.label}</div><div class="g2s" data-i="${i}" style="width:100%"></div></div>`).join("");
   p.gauges.forEach((g,i)=>{ const el=c.el.querySelector('.g2s[data-i="'+i+'"]'); const sub=g.sub?(g.sub.pre||"")+fmt(subs[i],g.sub.unit,g.sub.dec):null;
     gaugeSVG(el,vals[i],g.min,g.max,g.unit,g.dec,g.th,sub,null,null,null,null,null); }); }
 
