@@ -172,12 +172,12 @@ const SECTIONS=[
    {t:"stat",title:"PV total (life)",expr:M.pvtot,live:1,unit:"kWh",dec:1,span:2},
  ]},
  {name:"📊 Power by source", panels:[
-   {t:"chart",title:"Sources & load (W)",unit:"W",span:8,series:[
+   {t:"chart",title:"Sources & load (W)",unit:"W",agg:"max",span:8,series:[
      {expr:M.pvpow,label:"solar",color:C.pv},{expr:M.battdis,label:"battery",color:C.bat},
      {expr:M.grid,label:"grid",color:C.grid},{expr:M.load,label:"load",color:"var(--text)",width:2}]},
    {t:"chart",title:"Self-sufficiency %",unit:"%",min:0,max:100,span:4,series:[{expr:M.selfnow,label:"PV coverage",color:C.pv,fill:1}]},
-   {t:"chart",title:"Output power",unit:"W",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
-   {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:M.loadpct,label:"load",color:C.cons,fill:1}]},
+   {t:"chart",title:"Output power",unit:"W",agg:"max",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
+   {t:"chart",title:"Load %",unit:"%",min:0,max:100,agg:"max",span:6,series:[{expr:M.loadpct,label:"load",color:C.cons,fill:1}]},
  ]},
  {name:"🔋 Battery", panels:[
    {t:"multi",title:"Charging now",span:6,items:[
@@ -189,11 +189,11 @@ const SECTIONS=[
      {label:"Target float",expr:"energymeter_rated_float_v",live:1,unit:"V",dec:1,color:"var(--muted)"},
      {label:"Max current",expr:"energymeter_rated_max_charge_a",live:1,unit:"A",dec:0,color:"var(--muted)"}]},
    {t:"chart",title:"SoC & voltage",span:6,series:[{expr:M.batV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.soc,label:"SoC",color:C.bat,unit:"%",axis:"right",min:0,max:100}]},
-   {t:"chart",title:"Charge / discharge current",unit:"A",span:6,series:[{expr:M.chg,label:"charge",color:"#22c55e"},{expr:M.dis,label:"discharge",color:"#ef4444"}]},
+   {t:"chart",title:"Charge / discharge current",unit:"A",agg:"max",span:6,series:[{expr:M.chg,label:"charge",color:"#22c55e"},{expr:M.dis,label:"discharge",color:"#ef4444"}]},
    {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:6,series:[{expr:M.netbat,label:"net",color:"#06b6d4",fill:1}]},
  ]},
  {name:"☀️ Solar", panels:[
-   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
+   {t:"chart",title:"PV voltage / current / power",agg:"max",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
    {t:"stat",title:"PV peak",dyn:dv.pvPeak,unit:"W",span:3},
  ]},
  {name:"📈 History & state", panels:[
@@ -221,7 +221,7 @@ const SECTIONS=[
    {t:"chart",title:"Power factor",unit:"",min:0,max:1,dec:2,span:9,series:[{expr:M.pf,label:"PF",color:"#06b6d4",fill:1}]},
  ]},
  {name:"🌡️ Health & averages", panels:[
-   {t:"chart",title:"Heatsink temperature",unit:"°C",span:6,series:[{expr:M.temp,label:"temp",color:"var(--good)",width:2,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
+   {t:"chart",title:"Heatsink temperature",unit:"°C",agg:"max",span:6,series:[{expr:M.temp,label:"temp",color:"var(--good)",width:2,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
    {t:"chart",title:"Average load (1h / 24h)",unit:"W",span:4,series:[{expr:M.avg1h,label:"avg 1h",color:"#3b82f6"},{expr:M.avg24h,label:"avg 24h",color:"#a855f7"}]},
    {t:"stat",title:"Min SoC",dyn:dv.minSoc,unit:"%",span:2,th:[[0,"var(--bad)"],[20,"var(--warn)"],[40,"var(--good)"]]},
  ]},
@@ -426,7 +426,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else { const series=await Promise.all(p.series.map(async s=>({...s,pts:await qRange(s.expr,from,to,st)}))); c.chart.setData(series); }
+      else { const series=await Promise.all(p.series.map(async s=>{ const ag=s.agg||p.agg; const e=ag?`${ag}_over_time((${s.expr})[${st}s])`:s.expr; return {...s,pts:await qRange(e,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
     else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?evalT:now))))); renderTable(c); }
