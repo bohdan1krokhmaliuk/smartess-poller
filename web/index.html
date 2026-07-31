@@ -174,6 +174,12 @@ const dv={
 dv.gridCost=w=>`(${dv.grid(w)})*${TARIFF}`;
 dv.savings=w=>`clamp_min((${dv.cons(w)})-(${dv.grid(w)}),0)*${TARIFF}`;
 dv.total=w=>`(${dv.cons(w)})*${TARIFF}`;
+// "today" = delta of the monotonic lifetime counters since local midnight (robust to poller restarts;
+// matches the Energy tiles when the Today preset is selected). Ignores the passed window.
+const todaySec=()=>Math.max(60,Math.round((Date.now()-new Date().setHours(0,0,0,0))/1000));
+const etDelta=m=>`max_over_time(${m}[${todaySec()}s]) - min_over_time(${m}[${todaySec()}s])`;
+const dtoday={ cons:()=>etDelta("energymeter_consumed_total"), pv:()=>etDelta("energymeter_pv_total"),
+  grid:()=>etDelta("energymeter_grid_total"), bat:()=>etDelta("energymeter_battery_out_total") };
 const MODE_MAP={0:["PowerOn","var(--accent)"],1:["Standby","var(--warn)"],2:["Line","var(--good)"],3:["Battery","var(--accent)"],4:["Fault","var(--bad)"],5:["PowerSaving","var(--warn)"],6:["Shutdown","var(--muted)"],7:["Bypass","var(--warn)"]};
 const FAULT_MAP={0:["OK","var(--good)"],1:["FAULT","var(--bad)"]};
 const CHG_SRC={0:["Idle","var(--muted)"],1:["☀ Solar","var(--good)"],2:["⚡ Grid","var(--accent)"],3:["Solar + Grid","var(--good)"]};
@@ -189,14 +195,14 @@ const SECTIONS=[
      {label:"Health",expr:M.fault,live:1,map:FAULT_MAP},
      {label:"Heatsink",expr:M.temp,live:1,unit:"°C",th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
    {t:"table",title:"Sources",span:6,note:"Values are live; the energy column is today's total. Grid current is inferred (W ÷ V).",cols:["","V","A","W","today"],rows:[
-     {label:"PV",color:C.pv,cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{expr:"energymeter_pv_today",unit:"eauto"}]},
-     {label:"Battery",color:C.bat,cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{expr:"energymeter_battery_out_today",unit:"eauto"}]},
-     {label:"Grid",color:C.grid,cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{expr:"energymeter_grid_today",unit:"eauto"}]},
-     {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{expr:"energymeter_consumed_today",unit:"eauto"}]}]},
+     {label:"PV",color:C.pv,cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{dyn:dtoday.pv,unit:"eauto"}]},
+     {label:"Battery",color:C.bat,cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{dyn:dtoday.bat,unit:"eauto"}]},
+     {label:"Grid",color:C.grid,cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{dyn:dtoday.grid,unit:"eauto"}]},
+     {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{dyn:dtoday.cons,unit:"eauto"}]}]},
    {t:"multi",title:"Cost today",span:3,items:[
-     {label:"Total",dyn:()=>`energymeter_consumed_today*${TARIFF}`,unit:"money",dec:2,color:"var(--text)"},
-     {label:"☀ Solar saved",dyn:()=>`clamp_min(energymeter_consumed_today-energymeter_grid_today,0)*${TARIFF}`,unit:"money",dec:2,color:C.pv},
-     {label:"⚡ Grid",dyn:()=>`energymeter_grid_today*${TARIFF}`,unit:"money",dec:2,color:C.grid}]},
+     {label:"Total",dyn:()=>`(${dtoday.cons()})*${TARIFF}`,unit:"money",dec:2,color:"var(--text)"},
+     {label:"☀ Solar saved",dyn:()=>`clamp_min((${dtoday.cons()})-(${dtoday.grid()}),0)*${TARIFF}`,unit:"money",dec:2,color:C.pv},
+     {label:"⚡ Grid",dyn:()=>`(${dtoday.grid()})*${TARIFF}`,unit:"money",dec:2,color:C.grid}]},
  ]},
  {name:"🔋 Energy", panels:[
    {t:"stat",title:"Generated",dyn:dv.pv,unit:"kWh",dec:2,span:2},
