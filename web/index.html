@@ -87,7 +87,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
     <button data-dur="900">15m</button><button data-dur="3600">1h</button>
     <button data-dur="21600" class="on">6h</button><button data-dur="86400">24h</button>
     <button data-dur="604800">7d</button><button data-dur="2592000">30d</button>
-    <button data-today="1">Today</button>
+    <button data-dur="31536000">1y</button><button data-today="1">Today</button>
   </div>
   <span class="rel"><button class="iconbtn" id="customBtn" title="Custom range">📅</button>
     <div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom">
@@ -238,8 +238,8 @@ const state={ kind:"preset", dur:21600*1000, abs:null, autoMs:30000, timer:null 
 function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:to-state.dur,to}; } return state.abs; }
 function stepSec(){ const {from,to}=range(); return Math.max(10, Math.round((to-from)/1000/400)); }
 function windowSec(){ const {from,to}=range(); const evalT=Math.min(to,Date.now()); return {evalT, win:Math.max(60,Math.round((evalT-from)/1000))}; }
-const BUCKETS=[1,5,15,30,60,300,900,1800,3600,10800,21600,43200,86400]; // seconds, capped at 1 day
-function chooseBucket(spanSec){ const target=spanSec/60; for(const b of BUCKETS){ if(b>=target) return b; } return 86400; }
+const BUCKETS=[60,300,900,1800,3600,10800,21600,43200,86400,604800,2592000]; // 1m … 1 month
+function chooseBucket(spanSec){ const target=spanSec/60; for(const b of BUCKETS){ if(b>=target) return b; } return BUCKETS[BUCKETS.length-1]; }
 
 function gaugeSVG(el,v,min,max,unit,dec,th,sub){ const cx=80,cy=76,r=60,a0=140,a1=400;
   const frac=(v==null)?0:Math.max(0,Math.min(1,(v-min)/(max-min))); const col=resolveColor(thColor(v,th)||"var(--accent)");
