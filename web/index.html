@@ -130,12 +130,14 @@ function solarElevAz(lat,lon,d){ const r=Math.PI/180,g=180/Math.PI;
   const az=(Math.atan2(Math.sin(H*r),Math.cos(H*r)*Math.sin(lat*r)-Math.tan(dec*r)*Math.cos(lat*r))*g+540)%360;
   return {el,az}; }
 function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
-  const {el,az}=solarElevAz(PVLAT,PVLON,d); if(el<=2)return 0;
+  const g=gtiAt(d.getTime());
+  if(g!=null) return Math.round(PVKWP*g*0.82);   // Open-Meteo tilted irradiance (W/m², clouds already modelled) × system derate 0.82
+  const {el,az}=solarElevAz(PVLAT,PVLON,d); if(el<=2)return 0;   // fallback (offline): clear-sky geometry × cloud-cover factor
   const r=Math.PI/180, AM=1/Math.sin(el*r), DNI=1000*Math.pow(0.7,Math.pow(AM,0.678));
   const tilt=(PVTILT==null?30:PVTILT), paz=(PVAZ==null?180:PVAZ);
   const cosAOI=Math.sin(el*r)*Math.cos(tilt*r)+Math.cos(el*r)*Math.sin(tilt*r)*Math.cos((az-paz)*r);
   const POA=DNI*Math.max(0,cosAOI)+0.1*DNI*(1+Math.cos(tilt*r))/2;
-  return Math.round(PVKWP*POA*1.03); }   // calibration = system derate × clear-sky-model correction (fit so avail matches the array's measured unthrottled peaks)
+  return Math.round(PVKWP*POA*1.03*cloudFactor(cloudAt(d.getTime()))); }
 function pvPotentialW(){ return pvPotentialAt(new Date()); }
 
 // settings shared across clients via the poller's /settings (localStorage is the local cache)
@@ -280,14 +282,14 @@ const SECTIONS=[
 // Hover explanations (English) shown on each card title.
 const DESC={
  "Load":"Inverter output load as a % of its rated power. Sub-line is live output in watts.",
- "PV power":"Live solar power. Green arc = producing now, blue arc = clear-sky available now, and the dial max is your PV max (or the array nameplate from kWp). Sub-line shows the available power.",
+ "PV power":"Live solar power. Green arc = producing now, blue arc = available now (weather-model irradiance for your array, so it already reflects cloud cover), dial max = your PV max or the array nameplate. Sub-line shows the available power.",
  "Battery SoC":"Battery state of charge (%). Sub-line is the live battery voltage.",
  "Heatsink":"Inverter heatsink temperature. Green = normal, amber = warm, red = approaching over-temperature.",
  "Sources":"Live V, A and W for each source, plus energy used today. Grid current is inferred (W ÷ V).",
  "Mode":"Inverter working mode — Line (from grid), Battery (off-grid), Bypass, etc.",
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
- "Headroom":"Spare solar vs what you use. Available = clear-sky estimate now; Spare = available − current PV; Unused today = solar potential you didn't use (est.); Cloud = current cloud cover.",
+ "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; Unused today = solar you didn't use (est.); Cloud = current cloud cover.",
  "Produced / available / unused (W)":"Actual PV (green) vs clear-sky available (blue) over time; the shaded gap is solar you could have used but didn't.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
@@ -483,8 +485,18 @@ function renderInfo(c){ const i=c.last||{}; c.el.innerHTML = (i.model||i.serial|
 // weather (cloud cover) from Open-Meteo — free, no key, CORS-enabled; optional
 let WEATHER=null;
 async function fetchWeather(){ if(PVLAT==null||PVLON==null){ WEATHER=null; return; }
-  try{ const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${PVLAT}&longitude=${PVLON}&current=cloud_cover,temperature_2m`);
-    const j=await r.json(); if(j&&j.current) WEATHER={cloud:j.current.cloud_cover, temp:j.current.temperature_2m}; }catch(e){} }
+  const tilt=Math.round(PVTILT==null?30:PVTILT), omaz=Math.round((PVAZ==null?180:PVAZ)-180);  // Open-Meteo azimuth: 0=S,+W
+  try{ const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${PVLAT}&longitude=${PVLON}&current=cloud_cover,temperature_2m&hourly=global_tilted_irradiance,cloud_cover&tilt=${tilt}&azimuth=${omaz}&past_days=2&forecast_days=1&timezone=GMT`);
+    const j=await r.json(); const w=j.current?{cloud:j.current.cloud_cover,temp:j.current.temperature_2m}:{};
+    if(j.hourly&&j.hourly.time){ w.gti=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.global_tilted_irradiance[i]]).filter(p=>p[1]!=null);
+      w.cloudH=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.cloud_cover[i]]); }
+    WEATHER=w; }catch(e){} }
+function gtiAt(ms){ if(!WEATHER||!WEATHER.gti||!WEATHER.gti.length)return null; const h=WEATHER.gti;
+  if(ms<h[0][0]||ms>h[h.length-1][0]){ let b=null,bd=1e15; for(const[t,v]of h){const d=Math.abs(t-ms);if(d<bd){bd=d;b=v;}} return bd<5400000?b:null; }
+  for(let i=1;i<h.length;i++){ if(h[i][0]>=ms){ const[t0,v0]=h[i-1],[t1,v1]=h[i],f=(ms-t0)/(t1-t0||1); return v0+(v1-v0)*f; } } return null; }
+function cloudFactor(c){ if(c==null)return 1; const N=Math.max(0,Math.min(1,c/100)); return 1-0.75*Math.pow(N,3.4); }
+function cloudAt(ms){ if(!WEATHER)return null; const h=WEATHER.cloudH; if(!h||!h.length)return WEATHER.cloud;
+  let b=null,bd=1e15; for(const[t,c]of h){const d=Math.abs(t-ms);if(d<bd){bd=d;b=c;}} return bd<5400000?b:WEATHER.cloud; }
 
 // client-computed values (not from VM): PV headroom vs clear-sky potential
 const CLIENT={
