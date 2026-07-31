@@ -79,7 +79,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 <body>
 <div class="banner" id="banner">⚠ No connection to the data source — retrying…</div>
 <header>
-  <div class="brand"><span class="dot" id="freshDot"></span> Inverter</div>
+  <div class="brand"><span class="dot" id="freshDot"></span> Inverter <span id="lastUpd" style="color:var(--muted);font-size:.68rem;font-weight:400"></span></div>
   <div class="mode">
     <span class="badge unknown" id="modeBadge">…</span>
     <button class="modebtn" data-mode="local" title="Fast 10s logging (app offline)">LOCAL</button>
@@ -540,6 +540,7 @@ function renderSky(c){ const el=c.el;
   el.innerHTML=s; }
 
 async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
+  { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
   await Promise.all(cards.map(async c=>{ const p=c.p;
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
