@@ -116,6 +116,7 @@ mc.loop_start()
 # ---- BLE frame reassembly + publish -----------------------------------
 buf = bytearray()
 last_pub = [0.0]
+last_rx = [0.0]
 
 
 def _on_notify(_char, data):
@@ -136,13 +137,15 @@ def _on_notify(_char, data):
         frame = bytes(buf[:length])
         del buf[:length]
         d = parse_cell_info(frame)
-        if d and time.time() - last_pub[0] >= PERIOD:
-            last_pub[0] = time.time()
-            mc.publish(TOPIC + "bms_json", json.dumps(d), retain=True)
-            print("SoC %d%%  %.2fV  %+.1fA  cells %.3f-%.3f d%dmV  T %.1f/%.1f/%.1f  cyc %d  SoH %d%%"
-                  % (d["soc"], d["pack_voltage"], d["current"], d["cell_min"], d["cell_max"],
-                     round(d["cell_delta"] * 1000), d["temp_1"], d["temp_2"], d["temp_mos"],
-                     d["cycles"], d["soh"]))
+        if d:
+            last_rx[0] = time.time()
+            if time.time() - last_pub[0] >= PERIOD:
+                last_pub[0] = time.time()
+                mc.publish(TOPIC + "bms_json", json.dumps(d), retain=True)
+                print("SoC %d%%  %.2fV  %+.1fA  cells %.3f-%.3f d%dmV  T %.1f/%.1f/%.1f  cyc %d  SoH %d%%"
+                      % (d["soc"], d["pack_voltage"], d["current"], d["cell_min"], d["cell_max"],
+                         round(d["cell_delta"] * 1000), d["temp_1"], d["temp_2"], d["temp_mos"],
+                         d["cycles"], d["soh"]))
 
 
 async def run():
@@ -161,10 +164,16 @@ async def run():
                 print("connected", MAC)
                 mc.publish(TOPIC + "bms_active", "on", retain=True)
                 await c.start_notify(CHAR, _on_notify)
+                # One request; the BMS then streams cell-info frames on its own.
+                # It beeps on every command, so we DON'T re-poll -- we only nudge
+                # it again if the stream goes quiet for a while.
                 await c.write_gatt_char(CHAR, _cmd(CMD_CELL_INFO), response=False)
+                last_rx[0] = time.time()
                 while enabled and c.is_connected:
-                    await asyncio.sleep(PERIOD)
-                    await c.write_gatt_char(CHAR, _cmd(CMD_CELL_INFO), response=False)
+                    await asyncio.sleep(3)
+                    if time.time() - last_rx[0] > 20:      # stream stalled -> nudge once
+                        await c.write_gatt_char(CHAR, _cmd(CMD_CELL_INFO), response=False)
+                        last_rx[0] = time.time()
                 await c.stop_notify(CHAR)
             mc.publish(TOPIC + "bms_active", "off", retain=True)
         except Exception as e:                    # noqa: BLE stack raises many types
