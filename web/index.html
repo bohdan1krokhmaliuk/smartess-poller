@@ -352,7 +352,9 @@ async function qRange(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_ra
   return best.values.map(p=>[p[0]*1000,parseFloat(p[1])]).filter(p=>isFinite(p[1])); }catch(e){ conn(false); return []; } }
 
 const state={ kind:"preset", dur:21600*1000, abs:null, autoMs:30000, timer:null };
-function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:to-state.dur,to}; } return state.abs; }
+function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:to-state.dur,to}; }
+  if(state.kind==="today"){ const d=new Date(); d.setHours(0,0,0,0); return {from:d.getTime(),to:Date.now()}; }
+  return state.abs; }
 function stepSec(){ const {from,to}=range(); return Math.max(10, Math.round((to-from)/1000/400)); }
 function windowSec(){ const {from,to}=range(); const evalT=Math.min(to,Date.now()); return {evalT, win:Math.max(60,Math.round((evalT-from)/1000))}; }
 const BUCKETS=[60,300,900,1800,3600,10800,21600,43200,86400,604800,2592000]; // 1m … 1 month
@@ -419,15 +421,16 @@ class Chart{
     niceTicks(S.lmin,S.lmax,4).forEach(v=>{const y=YL(v);x.beginPath();x.moveTo(g.pl,y);x.lineTo(w-g.pr,y);x.stroke();x.fillText(fmtAxis(v),g.pl-5,y);});
     if(g.hasR){x.textAlign="left";niceTicks(S.rmin,S.rmax,4).forEach(v=>x.fillText(fmtAxis(v),w-g.pr+5,YR(v)));}
     const base=YL(S.lmin<0?0:S.lmin);
+    x.save();x.beginPath();x.rect(g.pl,g.pt,w-g.pl-g.pr,h-g.pt-g.pb);x.clip();   // keep bars/lines inside the plot (off the axis labels)
     if(this.p.kind==="bars"){ const n=this.series.length,bms=this.bucketMs||864e5,bw=Math.max(2,(X(from+bms)-X(from))*0.72/n);
-      this.series.forEach((s,si)=>{ x.fillStyle=resolveColor(s.color); s.pts.forEach(p=>{ const cx=X(p[0])+(si-(n-1)/2)*bw,y=YL(p[1]); x.fillRect(cx-bw/2, Math.min(y,base), bw, Math.abs(base-y)); }); }); this._X=X; this.drawOv(); return; }
+      this.series.forEach((s,si)=>{ x.fillStyle=resolveColor(s.color); s.pts.forEach(p=>{ const cx=X(p[0])+(si-(n-1)/2)*bw,y=YL(p[1]); x.fillRect(cx-bw/2, Math.min(y,base), bw, Math.abs(base-y)); }); }); x.restore(); this._X=X; this.drawOv(); return; }
     const gap=this.stepMs*2.5;
     this.series.forEach(s=>{ if(!s.pts.length)return; const Y=s.axis==="right"?YR:YL,col=resolveColor(s.color);
       segs(s.pts,gap).forEach(seg=>{ if(s.fill&&seg.length>1){ x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.lineTo(X(seg[seg.length-1][0]),base);x.lineTo(X(seg[0][0]),base);x.closePath();x.fillStyle=hexA(col,.16);x.fill(); }
         x.lineJoin="round";x.lineCap="round";x.lineWidth=s.width||1.4;
         if(s.th){ for(let i=1;i<seg.length;i++){ const a=seg[i-1],b=seg[i]; x.strokeStyle=resolveColor(thColor(Math.max(a[1],b[1]),s.th)||s.color); x.beginPath();x.moveTo(X(a[0]),Y(a[1]));x.lineTo(X(b[0]),Y(b[1]));x.stroke(); } }
         else { x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.strokeStyle=col;x.stroke(); } }); });
-    this._X=X; this.drawOv();
+    x.restore(); this._X=X; this.drawOv();
   }
   drawOv(){ const c=this.ov,dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight,g=this.geom(); const x=c.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,w,h);
     if(this.drag){ const a=Math.min(this.drag.x0,this.drag.x1),b=Math.max(this.drag.x0,this.drag.x1); x.fillStyle=hexA(resolveColor("var(--accent)"),.15);x.fillRect(a,g.pt,b-a,h-g.pt-g.pb); return; }
@@ -562,9 +565,9 @@ document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",
 
 function markPreset(el){ document.querySelectorAll("#presets button").forEach(b=>b.classList.toggle("on",b===el)); }
 function setPreset(dur){ state.kind="preset"; state.dur=dur; state.abs=null; state.custom=false; markPreset([...document.querySelectorAll("#presets button")].find(b=>+b.dataset.dur*1000===dur)); updateCustomBtn(); refresh(); }
-function setToday(){ const d=new Date(); d.setHours(0,0,0,0); const from=d.getTime(); state.kind="abs"; state.abs={from,to:from+864e5}; state.custom=false; markPreset(document.querySelector('#presets [data-today]')); updateCustomBtn(); refresh(); }
+function setToday(){ state.kind="today"; state.abs=null; state.custom=false; markPreset(document.querySelector('#presets [data-today]')); updateCustomBtn(); refresh(); }
 function setAbs(from,to){ state.kind="abs"; state.abs={from,to}; state.custom=true; markPreset(null); updateCustomBtn(); refresh(); }
-function isLive(){ return state.kind==="preset" || (state.abs && state.abs.to>=Date.now()); }   // presets always live; custom range live only while it includes now
+function isLive(){ return state.kind==="preset" || state.kind==="today" || (state.abs && state.abs.to>=Date.now()); }   // presets & today always live; custom range live only while it includes now
 function tick(){ if(isLive()) refresh(); }   // auto-refresh skips static (past) custom ranges
 function updateCustomBtn(){ const b=document.getElementById("customBtn"); b.textContent=state.custom?"↺":"📅"; b.title=state.custom?"Back to live (6h)":"Custom range"; }
 document.querySelectorAll("#presets button").forEach(b=>b.addEventListener("click",()=>{ b.dataset.today?setToday():setPreset(+b.dataset.dur*1000); }));
