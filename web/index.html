@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Inverter</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E☀️%3C/text%3E%3C/svg%3E">
 <style>
 :root{
   --bg:#f4f6fb; --panel:#ffffff; --panel2:#eef1f7; --text:#0f172a; --muted:#64748b;
@@ -378,7 +379,7 @@ function timeTicks(from,to){ const span=to-from,out=[]; const steps=[60e3,300e3,
 function fmtTick(t,span){ const d=new Date(t),p=n=>String(n).padStart(2,"0"); return span<=2*864e5 ? p(d.getHours())+":"+p(d.getMinutes()) : p(d.getDate())+"."+p(d.getMonth()+1); }
 
 const CHARTS=[]; let G={t:null,active:null};
-function broadcast(){ CHARTS.forEach(c=>c.drawOv()); }
+function broadcast(){ CHARTS.forEach(c=>c.drawOv()); cards.forEach(c=>c.p&&c.p.t==="sky"&&renderSky(c)); }
 class Chart{
   constructor(wrap,panel){ this.wrap=wrap; this.p=panel; this.series=[]; this.stepMs=60000; this.drag=null; CHARTS.push(this);
     this.base=document.createElement("canvas"); this.ov=document.createElement("canvas"); this.tip=document.createElement("div"); this.tip.className="tip"; wrap.append(this.base,this.ov,this.tip);
@@ -511,10 +512,13 @@ const CLIENT={
 
 function renderSky(c){ const el=c.el;
   if(PVLAT==null||PVLON==null){ el.innerHTML='<div style="color:var(--muted);font-size:.8rem">Set your location in ⚙ to show the sun path.</div>'; return; }
-  const now=new Date(), sn=solarElevAz(PVLAT,PVLON,now), y0=new Date(now); y0.setHours(0,0,0,0);
-  const path=[]; let rise=null,set=null,prev=-1;
-  for(let m=0;m<=1440;m+=10){ const d=new Date(y0.getTime()+m*60000), s=solarElevAz(PVLAT,PVLON,d);
-    if(s.el>0)path.push(s); if(prev<0&&s.el>=0&&!rise)rise=d; if(prev>=0&&s.el<0&&!set&&rise)set=d; prev=s.el; }
+  const scrub=G.t!=null, now=new Date(scrub?G.t:Date.now()), sn=solarElevAz(PVLAT,PVLON,now), y0=new Date(now); y0.setHours(0,0,0,0);
+  const key=y0.toDateString()+"|"+PVLAT+"|"+PVLON;   // sun path only changes per day/location — cache it (scrubbing just moves the marker)
+  if(!renderSky._c||renderSky._c.key!==key){ const path=[]; let rise=null,set=null,prev=-1;
+    for(let m=0;m<=1440;m+=10){ const d=new Date(y0.getTime()+m*60000), s=solarElevAz(PVLAT,PVLON,d);
+      if(s.el>0)path.push(s); if(prev<0&&s.el>=0&&!rise)rise=d; if(prev>=0&&s.el<0&&!set&&rise)set=d; prev=s.el; }
+    renderSky._c={key,path,rise,set}; }
+  const path=renderSky._c.path, rise=renderSky._c.rise, set=renderSky._c.set;
   const W=320,H=150,pl=6,pr=6,ptp=10,pb=22,gw=W-pl-pr,gh=H-ptp-pb,A0=60,A1=300,E1=70;
   const X=a=>pl+gw*(Math.max(A0,Math.min(A1,a))-A0)/(A1-A0), Y=e=>ptp+gh*(1-Math.max(0,Math.min(E1,e))/E1);
   const grid=cssVar('--grid'),muted=cssVar('--muted'); const names={90:'E',135:'SE',180:'S',225:'SW',270:'W'};
@@ -527,7 +531,7 @@ function renderSky(c){ const el=c.el;
   s+='</svg>';
   const cl=WEATHER?WEATHER.cloud:null, tp=WEATHER?WEATHER.temp:null;
   s+='<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;font-size:.76rem;color:var(--muted);margin-top:3px">'+
-     '<span>☀ '+(sn.el>0?sn.el.toFixed(0)+'° · '+sn.az.toFixed(0)+'° az':'below horizon')+'</span>'+
+     '<span>'+(scrub?now.toTimeString().slice(0,5)+' ':'☀ ')+(sn.el>0?sn.el.toFixed(0)+'° · '+sn.az.toFixed(0)+'° az':'below horizon')+'</span>'+
      '<span>'+(cl!=null?'☁ '+cl+'%':'')+(tp!=null?' · '+tp.toFixed(0)+'°C':'')+'</span>'+
      '<span>'+(rise&&set?'↑'+rise.toTimeString().slice(0,5)+' ↓'+set.toTimeString().slice(0,5):'')+'</span></div>';
   el.innerHTML=s; }
