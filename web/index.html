@@ -345,7 +345,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
   await Promise.all(cards.map(async c=>{ const p=c.p;
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
-        const series=await Promise.all(p.series.map(async s=>({...s, pts:(await qRange(`increase_pure(${s.counter}[${B}s])`, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}))); c.chart.setData(series); }
+        const series=await Promise.all(p.series.map(async s=>({...s, pts:(await qRange(`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}))); c.chart.setData(series); }
       else { const series=await Promise.all(p.series.map(async s=>({...s,pts:await qRange(s.expr,from,to,st)}))); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
