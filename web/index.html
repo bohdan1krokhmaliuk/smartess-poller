@@ -228,7 +228,7 @@ const SECTIONS=[
    {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:6,series:[{expr:M.netbat,label:"net",color:"#06b6d4",fill:1}]},
  ]},
  {name:"☀️ Solar", panels:[
-   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
+   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#ef4444",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
    {t:"multi",title:"Headroom",span:3,items:[
      {label:"Available now",client:"availNow",unit:"W",color:"#3b82f6"},
      {label:"Spare now",client:"spareNow",unit:"W",color:C.pv},
@@ -317,6 +317,7 @@ const DESC={
 
 const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const resolveColor=c=>(c&&c.startsWith("var("))?cssVar(c.slice(4,-1)):c;
+function fmtDur(ms){ const s=(ms||0)/1000; if(s<90)return Math.round(s)+" s"; if(s<5400)return Math.round(s/60)+" min"; if(s<86400)return (s/3600).toFixed((s/3600)%1?1:0)+" h"; if(s<604800)return Math.round(s/86400)+" d"; if(s<2592000)return Math.round(s/604800)+" wk"; return Math.round(s/2592000)+" mo"; }
 function fmt(v,unit,dec){
   if(v==null||!isFinite(v))return "—"; const u=unit||"";
   if(u==="money")return v.toFixed(dec??2)+" "+CUR;
@@ -391,6 +392,7 @@ class Chart{
     const X=t=>g.pl+(t-from)/(to-from)*(w-g.pl-g.pr);
     x.font="10px -apple-system,system-ui,sans-serif"; x.textAlign="center"; x.textBaseline="top";
     timeTicks(from,to).forEach(tk=>{const px=X(tk.t);x.strokeStyle=grid;x.beginPath();x.moveTo(px,g.pt);x.lineTo(px,h-g.pb);x.stroke();x.fillStyle=muted;x.fillText(tk.l,px,h-g.pb+4);});
+    if(this.p.kind!=="timeline"){ const per=this.p.kind==="bars"?("per "+fmtDur(this.bucketMs||864e5)):(AGG+" · "+fmtDur(this.stepMs)); x.save();x.font="9px system-ui,sans-serif";x.textAlign="right";x.textBaseline="top";x.fillStyle=muted;x.fillText(per,w-g.pr,g.pt);x.restore(); }
     const empty=this.series.every(s=>!s.pts||!s.pts.length);
     if(empty){ x.fillStyle=muted;x.textBaseline="middle";x.fillText("No data in range",w/2,h/2); this._X=X; this.drawOv(); return; }
     if(this.p.kind==="timeline"){ const s=this.series[0],y0=g.pt,y1=h-g.pb;
