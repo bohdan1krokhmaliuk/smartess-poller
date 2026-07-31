@@ -102,7 +102,11 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
   <span class="rel"><button class="iconbtn" id="cfgBtn" title="Settings">⚙</button>
     <div class="popover" id="cfgPop"><label>Tariff (per kWh)</label><input type="number" step="0.01" id="tariff">
       <label>Currency</label><input type="text" id="currency" maxlength="4">
-      <label>PV max (W, 0 = auto)</label><input type="number" step="50" id="pvmax"><button class="apply" id="cfgApply">Save</button></div></span>
+      <label>PV max (W, 0 = auto / clear-sky)</label><input type="number" step="50" id="pvmax">
+      <label>Location lat / lon (clear-sky estimate)</label><div style="display:flex;gap:6px"><input type="number" step="0.001" id="pvlat" placeholder="lat"><input type="number" step="0.001" id="pvlon" placeholder="lon"></div>
+      <label>Array kWp / tilt° / azimuth° (180=S)</label><div style="display:flex;gap:6px"><input type="number" step="0.1" id="pvkwp" placeholder="kWp"><input type="number" step="1" id="pvtilt" placeholder="tilt"><input type="number" step="1" id="pvaz" placeholder="az"></div>
+      <label>Chart aggregation (per bucket)</label><select id="agg"><option value="avg">avg</option><option value="max">max (catch peaks)</option><option value="min">min</option></select>
+      <button class="apply" id="cfgApply">Save</button></div></span>
   <button class="iconbtn" id="themeBtn" title="Toggle theme">🌙</button>
 </header>
 <main id="main"></main>
@@ -113,6 +117,25 @@ const VM="/vm/api/v1";
 let TARIFF=parseFloat(localStorage.getItem("tariff")||"4.32")||0;  // UA regulated household tariff (₴/kWh, fixed until Oct 2026); no public API — edit in ⚙
 let CUR=localStorage.getItem("currency")||"₴";
 let PVMAX=parseFloat(localStorage.getItem("pvmax")||"0")||0;
+let AGG=localStorage.getItem("agg")||"avg";   // chart bucket aggregation: avg | max | min
+const gnum=k=>{const v=parseFloat(localStorage.getItem(k));return isNaN(v)?null:v;};
+let PVLAT=gnum("pvlat"),PVLON=gnum("pvlon"),PVKWP=gnum("pvkwp")||0,PVTILT=gnum("pvtilt"),PVAZ=gnum("pvaz");
+// clear-sky PV potential (W) now, from sun position + array geometry — the ceiling the panels could reach under a clear sky
+function solarElevAz(lat,lon,d){ const r=Math.PI/180,g=180/Math.PI;
+  const N=(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())-Date.UTC(d.getUTCFullYear(),0,0))/864e5;
+  const dec=23.45*Math.sin(r*360*(284+N)/365), B=r*360*(N-81)/364, EoT=9.87*Math.sin(2*B)-7.53*Math.cos(B)-1.5*Math.sin(B);
+  const utcH=d.getUTCHours()+d.getUTCMinutes()/60+d.getUTCSeconds()/3600, st=utcH+lon/15+EoT/60, H=15*(st-12);
+  const sinEl=Math.sin(lat*r)*Math.sin(dec*r)+Math.cos(lat*r)*Math.cos(dec*r)*Math.cos(H*r);
+  const el=Math.asin(Math.max(-1,Math.min(1,sinEl)))*g;
+  const az=(Math.atan2(Math.sin(H*r),Math.cos(H*r)*Math.sin(lat*r)-Math.tan(dec*r)*Math.cos(lat*r))*g+540)%360;
+  return {el,az}; }
+function pvPotentialW(){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
+  const {el,az}=solarElevAz(PVLAT,PVLON,new Date()); if(el<=2)return 0;
+  const r=Math.PI/180, AM=1/Math.sin(el*r), DNI=1000*Math.pow(0.7,Math.pow(AM,0.678));
+  const tilt=(PVTILT==null?30:PVTILT), paz=(PVAZ==null?180:PVAZ);
+  const cosAOI=Math.sin(el*r)*Math.cos(tilt*r)+Math.cos(el*r)*Math.sin(tilt*r)*Math.cos((az-paz)*r);
+  const POA=DNI*Math.max(0,cosAOI)+0.1*DNI*(1+Math.cos(tilt*r))/2;
+  return Math.round(PVKWP*POA*0.85); }
 
 const M={
   soc:"inverter_battery_capacity", loadpct:"inverter_output_load_percent",
@@ -172,12 +195,12 @@ const SECTIONS=[
    {t:"stat",title:"PV total (life)",expr:M.pvtot,live:1,unit:"kWh",dec:1,span:2},
  ]},
  {name:"📊 Power by source", panels:[
-   {t:"chart",title:"Sources & load (W)",unit:"W",agg:"max",span:8,series:[
+   {t:"chart",title:"Sources & load (W)",unit:"W",span:8,series:[
      {expr:M.pvpow,label:"solar",color:C.pv},{expr:M.battdis,label:"battery",color:C.bat},
      {expr:M.grid,label:"grid",color:C.grid},{expr:M.load,label:"load",color:"var(--text)",width:2}]},
    {t:"chart",title:"Self-sufficiency %",unit:"%",min:0,max:100,span:4,series:[{expr:M.selfnow,label:"PV coverage",color:C.pv,fill:1}]},
-   {t:"chart",title:"Output power",unit:"W",agg:"max",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
-   {t:"chart",title:"Load %",unit:"%",min:0,max:100,agg:"max",span:6,series:[{expr:M.loadpct,label:"load",color:C.cons,fill:1}]},
+   {t:"chart",title:"Output power",unit:"W",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
+   {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:M.loadpct,label:"load",color:C.cons,fill:1}]},
  ]},
  {name:"🔋 Battery", panels:[
    {t:"multi",title:"Charging now",span:6,items:[
@@ -189,11 +212,11 @@ const SECTIONS=[
      {label:"Target float",expr:"energymeter_rated_float_v",live:1,unit:"V",dec:1,color:"var(--muted)"},
      {label:"Max current",expr:"energymeter_rated_max_charge_a",live:1,unit:"A",dec:0,color:"var(--muted)"}]},
    {t:"chart",title:"SoC & voltage",span:6,series:[{expr:M.batV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.soc,label:"SoC",color:C.bat,unit:"%",axis:"right",min:0,max:100}]},
-   {t:"chart",title:"Charge / discharge current",unit:"A",agg:"max",span:6,series:[{expr:M.chg,label:"charge",color:"#22c55e"},{expr:M.dis,label:"discharge",color:"#ef4444"}]},
+   {t:"chart",title:"Charge / discharge current",unit:"A",span:6,series:[{expr:M.chg,label:"charge",color:"#22c55e"},{expr:M.dis,label:"discharge",color:"#ef4444"}]},
    {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:6,series:[{expr:M.netbat,label:"net",color:"#06b6d4",fill:1}]},
  ]},
  {name:"☀️ Solar", panels:[
-   {t:"chart",title:"PV voltage / current / power",agg:"max",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
+   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
    {t:"stat",title:"PV peak",dyn:dv.pvPeak,unit:"W",span:3},
  ]},
  {name:"📈 History & state", panels:[
@@ -221,7 +244,7 @@ const SECTIONS=[
    {t:"chart",title:"Power factor",unit:"",min:0,max:1,dec:2,span:9,series:[{expr:M.pf,label:"PF",color:"#06b6d4",fill:1}]},
  ]},
  {name:"🌡️ Health & averages", panels:[
-   {t:"chart",title:"Heatsink temperature",unit:"°C",agg:"max",span:6,series:[{expr:M.temp,label:"temp",color:"var(--good)",width:2,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
+   {t:"chart",title:"Heatsink temperature",unit:"°C",span:6,series:[{expr:M.temp,label:"temp",color:"var(--good)",width:2,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
    {t:"chart",title:"Average load (1h / 24h)",unit:"W",span:4,series:[{expr:M.avg1h,label:"avg 1h",color:"#3b82f6"},{expr:M.avg24h,label:"avg 24h",color:"#a855f7"}]},
    {t:"stat",title:"Min SoC",dyn:dv.minSoc,unit:"%",span:2,th:[[0,"var(--bad)"],[20,"var(--warn)"],[40,"var(--good)"]]},
  ]},
@@ -231,7 +254,7 @@ const SECTIONS=[
 // Hover explanations (English) shown on each card title.
 const DESC={
  "Load":"Inverter output load as a % of its rated power. Sub-line is live output in watts.",
- "PV power":"Live solar power (PV voltage × current). The dial fills toward the all-time peak, or your PV max from settings.",
+ "PV power":"Live solar power (PV voltage × current). The dial fills toward the clear-sky potential (if location+array are set), else your PV max, else the all-time peak; the sub-line shows that ceiling.",
  "Battery SoC":"Battery state of charge (%). Sub-line is the live battery voltage.",
  "Heatsink":"Inverter heatsink temperature. Green = normal, amber = warm, red = approaching over-temperature.",
  "Sources":"Live V, A and W for each source, plus energy used today. Grid current is inferred (W ÷ V).",
@@ -399,11 +422,11 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
 function renderStat(c){ const p=c.p,v=c.last; if(v===undefined){ c.el.innerHTML='<span class="err">—</span>'; return; }
   if(p.map){ const m=p.map[Math.round(v)]; c.el.innerHTML=(v==null||!m)?"—":`<span style="color:${resolveColor(m[1])}">${m[0]}</span>`; return; }
   c.el.textContent=fmt(v,p.unit,p.dec); const col=thColor(v,p.th); c.el.style.color=col?resolveColor(col):"var(--text)"; }
-function renderGauge(c){ const p=c.p; const setMax=(p.maxSetting==="pvmax"&&PVMAX>0)?PVMAX:0;
+function renderGauge(c){ const p=c.p; let setMax=0,sub=null;
+  if(p.maxSetting==="pvmax"){ if(PVMAX>0){ setMax=PVMAX; sub="max "+fmt(PVMAX,"W"); }
+    else { const pot=pvPotentialW(); if(pot!=null&&pot>0){ setMax=pot; sub="avail "+fmt(pot,"W"); } } }
   const mx=setMax>0?setMax:((c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max);
-  let sub=null;
-  if(setMax>0&&p.maxSetting==="pvmax") sub="max "+fmt(setMax,"W");
-  else if(p.sub) sub=(p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec);
+  if(sub==null&&p.sub) sub=(p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec);
   gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th,sub); }
 function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>{
   let disp; if(it.map){ const m=it.map[Math.round(vals[i])]; disp=`<b style="color:${m?resolveColor(m[1]):'var(--muted)'};font-weight:700;font-size:1.05rem">${(vals[i]==null||!m)?'—':m[0]}</b>`; }
@@ -426,7 +449,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else { const series=await Promise.all(p.series.map(async s=>{ const ag=s.agg||p.agg; const e=ag?`${ag}_over_time((${s.expr})[${st}s])`:s.expr; return {...s,pts:await qRange(e,from,to,st)}; })); c.chart.setData(series); }
+      else { const series=await Promise.all(p.series.map(async s=>{ const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${st}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
     else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?evalT:now))))); renderTable(c); }
@@ -453,8 +476,12 @@ cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); 
 document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); cbtn.classList.remove("on"); setAbs(f,t); } });
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
-cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ document.getElementById("tariff").value=TARIFF||""; document.getElementById("currency").value=CUR; document.getElementById("pvmax").value=PVMAX||""; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
-document.getElementById("cfgApply").addEventListener("click",()=>{ TARIFF=parseFloat(document.getElementById("tariff").value)||0; CUR=document.getElementById("currency").value||"₴"; PVMAX=parseFloat(document.getElementById("pvmax").value)||0; localStorage.setItem("tariff",TARIFF); localStorage.setItem("currency",CUR); localStorage.setItem("pvmax",PVMAX); cfgPop.classList.remove("open"); cfgBtn.classList.remove("on"); refresh(); });
+cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ const S=(id,v)=>document.getElementById(id).value=(v==null?"":v); S("tariff",TARIFF||""); document.getElementById("currency").value=CUR; S("pvmax",PVMAX||""); S("pvlat",PVLAT); S("pvlon",PVLON); S("pvkwp",PVKWP||""); S("pvtilt",PVTILT); S("pvaz",PVAZ); document.getElementById("agg").value=AGG; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
+document.getElementById("cfgApply").addEventListener("click",()=>{ const V=id=>document.getElementById(id).value; const setNum=(k,id)=>{ const v=V(id); if(v===""){localStorage.removeItem(k);return null;} const n=parseFloat(v); if(isNaN(n)){localStorage.removeItem(k);return null;} localStorage.setItem(k,n); return n; };
+  TARIFF=parseFloat(V("tariff"))||0; CUR=V("currency")||"₴"; PVMAX=parseFloat(V("pvmax"))||0; localStorage.setItem("tariff",TARIFF); localStorage.setItem("currency",CUR); localStorage.setItem("pvmax",PVMAX);
+  PVLAT=setNum("pvlat","pvlat"); PVLON=setNum("pvlon","pvlon"); PVKWP=setNum("pvkwp","pvkwp")||0; PVTILT=setNum("pvtilt","pvtilt"); PVAZ=setNum("pvaz","pvaz");
+  AGG=V("agg")||"avg"; localStorage.setItem("agg",AGG);
+  cfgPop.classList.remove("open"); cfgBtn.classList.remove("on"); refresh(); });
 document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classList.remove("open");cbtn.classList.remove("on"); cfgPop.classList.remove("open");cfgBtn.classList.remove("on"); } });
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
