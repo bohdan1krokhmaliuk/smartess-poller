@@ -88,7 +88,9 @@ def parse_cell_info(f):
 
 
 # ---- MQTT -------------------------------------------------------------
-enabled = True
+enabled = True                 # manual on/off via smartess/bms_control
+last_inv = [0.0]               # time of the last live inverter frame (smartess/qpigs_json)
+INVERTER_TIMEOUT = 180         # stop reading the BMS if the inverter goes quiet this long
 
 
 def _on_msg(_c, _u, m):
@@ -97,6 +99,13 @@ def _on_msg(_c, _u, m):
         want = m.payload.decode(errors="ignore").strip().lower()
         enabled = want not in ("off", "0", "false", "")
         print("control ->", "ON" if enabled else "OFF")
+    elif m.topic == TOPIC + "qpigs_json" and not m.retain:   # live inverter frame (ignore the retained one on subscribe)
+        last_inv[0] = time.time()
+
+
+def _inverter_live():
+    # no point holding the BLE link (or draining) when the inverter is off
+    return time.time() - last_inv[0] < INVERTER_TIMEOUT
 
 
 def _make_client():
@@ -113,6 +122,7 @@ if MQTT_USER:
 mc.on_message = _on_msg
 mc.connect(MQTT_HOST, MQTT_PORT, 60)
 mc.subscribe(TOPIC + "bms_control")
+mc.subscribe(TOPIC + "qpigs_json")     # watch the inverter's liveness
 mc.loop_start()
 
 
@@ -152,11 +162,16 @@ def _on_notify(_char, data):
 
 
 async def run():
+    idle_note = False
     while True:
-        if not enabled:
+        if not (enabled and _inverter_live()):
+            if not idle_note:
+                print("idle:", "off (bms_control)" if not enabled else "inverter offline - not reading BMS")
+                idle_note = True
             mc.publish(TOPIC + "bms_active", "off", retain=True)
             await asyncio.sleep(3)
             continue
+        idle_note = False
         try:
             dev = await BleakScanner.find_device_by_address(MAC, timeout=15)
             if not dev:
@@ -175,7 +190,7 @@ async def run():
                 await asyncio.sleep(1.0)
                 await c.write_gatt_char(CHAR, _cmd(CMD_CELL_INFO), response=False)
                 last_rx[0] = time.time()
-                while enabled and c.is_connected:
+                while enabled and _inverter_live() and c.is_connected:
                     await asyncio.sleep(3)
                     if time.time() - last_rx[0] > 20:      # stream stalled -> nudge once
                         await c.write_gatt_char(CHAR, _cmd(CMD_CELL_INFO), response=False)

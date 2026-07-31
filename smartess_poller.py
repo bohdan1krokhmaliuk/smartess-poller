@@ -625,7 +625,7 @@ def handle_passthrough(dongle, mc, cfg, cloud):
             pass
 
 
-def start_control_server(port, state, state_lock, set_mode):
+def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
     """Lightweight web server: serves the static dashboard (web/index.html),
     proxies read-only VictoriaMetrics queries (/vm/...), and toggles the mode
     (/control/<mode>, returns JSON). One process, no extra services."""
@@ -662,6 +662,13 @@ def start_control_server(port, state, state_lock, set_mode):
                 with state_lock:
                     cur = state["mode"]
                 self._reply(200, "application/json", json.dumps({"mode": cur}))
+                return
+
+            if p.endswith("/bms/on") or p.endswith("/bms/off"):
+                st = p.rsplit("/", 1)[1]                # "on" | "off"
+                if mc is not None:
+                    mc.publish(topic + "bms_control", st, retain=True)
+                self._reply(200, "application/json", json.dumps({"bms": st}))
                 return
 
             if path.startswith("/vm/"):
@@ -780,7 +787,7 @@ def main():
     print("MQTT connected -> %s:%d (topic %s)" % (cfg["mqtt_host"], cfg["mqtt_port"], topic))
 
     if cfg["control_port"]:
-        start_control_server(cfg["control_port"], state, state_lock, set_mode)
+        start_control_server(cfg["control_port"], state, state_lock, set_mode, mc, topic)
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
