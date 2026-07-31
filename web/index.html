@@ -54,7 +54,8 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .grid.hidden{display:none}
 .card{grid-column:span 3; background:var(--panel); border:1px solid var(--border); border-radius:.8rem; box-shadow:var(--shadow); padding:.7rem .8rem; min-width:0; position:relative}
 .card h3{margin:0 0 .3rem; font-size:.78rem; font-weight:600; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.card h3[title]{text-decoration:underline dotted; text-decoration-color:var(--border); text-underline-offset:2px; cursor:help}
+.card h3[data-tip]{text-decoration:underline dotted; text-decoration-color:var(--border); text-underline-offset:2px; cursor:help}
+#tip{position:fixed; z-index:200; max-width:280px; background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:.5rem; padding:.5rem .6rem; font-size:.78rem; line-height:1.45; box-shadow:var(--shadow); display:none; pointer-events:none}
 .card .val{font-size:clamp(1.3rem,2.4vw,1.9rem); font-weight:700; line-height:1.1; color:var(--text)}
 .card.chart{grid-column:span 6}
 .card.info{grid-column:span 12}
@@ -144,20 +145,23 @@ dv.total=w=>`(${dv.cons(w)})*${TARIFF}`;
 const MODE_MAP={0:["PowerOn","var(--accent)"],1:["Standby","var(--warn)"],2:["Line","var(--good)"],3:["Battery","var(--accent)"],4:["Fault","var(--bad)"],5:["PowerSaving","var(--warn)"],6:["Shutdown","var(--muted)"],7:["Bypass","var(--warn)"]};
 const FAULT_MAP={0:["OK","var(--good)"],1:["FAULT","var(--bad)"]};
 const CHG_SRC={0:["Idle","var(--muted)"],1:["☀ Solar","var(--good)"],2:["⚡ Grid","var(--accent)"],3:["Solar + Grid","var(--good)"]};
+const C={pv:"#22c55e",bat:"#f59e0b",grid:"#3b82f6",load:"var(--text)",cons:"#a855f7"};  // source identity: PV=green, battery=amber, grid=blue
 
 const SECTIONS=[
  {name:"⚡ Now", panels:[
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
-   {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",maxSetting:"pvmax",span:3,th:[[0,"#f59e0b"],[75,"var(--good)"]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"пік "}},
+   {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",maxSetting:"pvmax",span:3,th:[[0,C.pv]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"peak "}},
    {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
-   {t:"stat",title:"Heatsink",expr:M.temp,live:1,unit:"°C",span:3,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
-   {t:"table",title:"Sources",span:6,note:"Energy column is over the selected time range (matches the Energy tiles). Grid current is inferred (W ÷ V).",cols:["","V","A","W","energy"],rows:[
-     {label:"PV",color:"#f59e0b",cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{dyn:dv.pv,unit:"eauto"}]},
-     {label:"Battery",color:"#22c55e",cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{dyn:dv.bat,unit:"eauto"}]},
-     {label:"Grid",color:"#3b82f6",cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{dyn:dv.grid,unit:"eauto"}]},
-     {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{dyn:dv.cons,unit:"eauto"}]}]},
-   {t:"stat",title:"Mode",expr:M.mode,live:1,map:MODE_MAP,span:3},
-   {t:"stat",title:"Status",expr:M.fault,live:1,map:FAULT_MAP,span:3},
+   {t:"multi",title:"Status",span:3,items:[
+     {label:"Mode",expr:M.mode,live:1,map:MODE_MAP},
+     {label:"Health",expr:M.fault,live:1,map:FAULT_MAP},
+     {label:"Heatsink",expr:M.temp,live:1,unit:"°C",th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
+   {t:"table",title:"Sources",span:6,note:"Values are live; the energy column is today's total. Grid current is inferred (W ÷ V).",cols:["","V","A","W","today"],rows:[
+     {label:"PV",color:C.pv,cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{expr:"energymeter_pv_today",unit:"eauto"}]},
+     {label:"Battery",color:C.bat,cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{expr:"energymeter_battery_out_today",unit:"eauto"}]},
+     {label:"Grid",color:C.grid,cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{expr:"energymeter_grid_today",unit:"eauto"}]},
+     {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{expr:"energymeter_consumed_today",unit:"eauto"}]}]},
+   {t:"stat",title:"Cost today",dyn:()=>`energymeter_consumed_today*${TARIFF}`,unit:"money",dec:2,span:3},
  ]},
  {name:"🔋 Energy", panels:[
    {t:"stat",title:"Generated",dyn:dv.pv,unit:"kWh",dec:2,span:2},
@@ -167,25 +171,13 @@ const SECTIONS=[
    {t:"stat",title:"Self-sufficiency",dyn:dv.self,unit:"%",dec:0,span:2,th:[[0,"var(--warn)"],[50,"var(--good)"]]},
    {t:"stat",title:"PV total (life)",expr:M.pvtot,live:1,unit:"kWh",dec:1,span:2},
  ]},
- {name:"💰 Cost (selected range)", panels:[
-   {t:"multi",title:"Cost",span:6,items:[
-     {label:"Total",dyn:dv.total,unit:"money",dec:2,color:"var(--text)"},
-     {label:"Grid",dyn:dv.gridCost,unit:"money",dec:2,color:"var(--bad)"},
-     {label:"Solar saved",dyn:dv.savings,unit:"money",dec:2,color:"var(--good)"}]},
- ]},
  {name:"📊 Power by source", panels:[
    {t:"chart",title:"Sources & load (W)",unit:"W",span:8,series:[
-     {expr:M.pvpow,label:"solar",color:"#f59e0b"},{expr:M.battdis,label:"battery",color:"#22c55e"},
-     {expr:M.grid,label:"grid",color:"#3b82f6"},{expr:M.load,label:"load",color:"var(--text)",width:2}]},
-   {t:"chart",title:"Self-sufficiency %",unit:"%",min:0,max:100,span:4,series:[{expr:M.selfnow,label:"PV coverage",color:"#22c55e",fill:1}]},
+     {expr:M.pvpow,label:"solar",color:C.pv},{expr:M.battdis,label:"battery",color:C.bat},
+     {expr:M.grid,label:"grid",color:C.grid},{expr:M.load,label:"load",color:"var(--text)",width:2}]},
+   {t:"chart",title:"Self-sufficiency %",unit:"%",min:0,max:100,span:4,series:[{expr:M.selfnow,label:"PV coverage",color:C.pv,fill:1}]},
    {t:"chart",title:"Output power",unit:"W",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
-   {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:M.loadpct,label:"load",color:"#f59e0b",fill:1}]},
- ]},
- {name:"📈 History & state", panels:[
-   {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
-     {counter:"energymeter_pv_total",label:"generated",color:"#f59e0b"},
-     {counter:"energymeter_consumed_total",label:"consumed",color:"#3b82f6"}]},
-   {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
+   {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:M.loadpct,label:"load",color:C.cons,fill:1}]},
  ]},
  {name:"🔋 Battery", panels:[
    {t:"multi",title:"Charging now",span:6,items:[
@@ -196,18 +188,33 @@ const SECTIONS=[
      {label:"Target bulk",expr:"energymeter_rated_bulk_v",live:1,unit:"V",dec:1,color:"var(--muted)"},
      {label:"Target float",expr:"energymeter_rated_float_v",live:1,unit:"V",dec:1,color:"var(--muted)"},
      {label:"Max current",expr:"energymeter_rated_max_charge_a",live:1,unit:"A",dec:0,color:"var(--muted)"}]},
-   {t:"chart",title:"SoC & voltage",span:6,series:[{expr:M.batV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.soc,label:"SoC",color:"#22c55e",unit:"%",axis:"right",min:0,max:100}]},
+   {t:"chart",title:"SoC & voltage",span:6,series:[{expr:M.batV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.soc,label:"SoC",color:C.bat,unit:"%",axis:"right",min:0,max:100}]},
    {t:"chart",title:"Charge / discharge current",unit:"A",span:6,series:[{expr:M.chg,label:"charge",color:"#22c55e"},{expr:M.dis,label:"discharge",color:"#ef4444"}]},
    {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:6,series:[{expr:M.netbat,label:"net",color:"#06b6d4",fill:1}]},
  ]},
  {name:"☀️ Solar", panels:[
-   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:"#f59e0b",unit:"W",axis:"right"}]},
+   {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
    {t:"stat",title:"PV peak",dyn:dv.pvPeak,unit:"W",span:3},
  ]},
+ {name:"📈 History & state", panels:[
+   {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
+     {counter:"energymeter_pv_total",label:"generated",color:C.pv},
+     {counter:"energymeter_consumed_total",label:"consumed",color:C.cons}]},
+   {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
+ ]},
  {name:"🔗 Grid & output", panels:[
-   {t:"chart",title:"Voltages (grid / output / bus)",unit:"V",span:6,series:[{expr:M.gridV,label:"grid",color:"#3b82f6"},{expr:M.outV,label:"output",color:"#22c55e"},{expr:M.busV,label:"bus",color:"#a855f7"}]},
-   {t:"chart",title:"Frequencies",unit:"Hz",dec:2,span:3,series:[{expr:M.gridHz,label:"grid",color:"#3b82f6"},{expr:M.outHz,label:"output",color:"#22c55e"}]},
+   {t:"chart",title:"Voltages (grid / output / bus)",unit:"V",span:6,series:[{expr:M.gridV,label:"grid",color:C.grid},{expr:M.outV,label:"output",color:"#22c55e"},{expr:M.busV,label:"bus",color:"#a855f7"}]},
+   {t:"chart",title:"Frequencies",unit:"Hz",dec:2,span:3,series:[{expr:M.gridHz,label:"grid",color:C.grid},{expr:M.outHz,label:"output",color:"#22c55e"}]},
    {t:"stat",title:"Grid uptime",dyn:dv.uptime,unit:"%",dec:1,span:3,th:[[0,"var(--bad)"],[80,"var(--warn)"],[98,"var(--good)"]]},
+ ]},
+ {name:"💰 Cost", panels:[
+   {t:"multi",title:"Cost",span:4,items:[
+     {label:"Total",dyn:dv.total,unit:"money",dec:2,color:"var(--text)"},
+     {label:"Grid",dyn:dv.gridCost,unit:"money",dec:2,color:C.grid},
+     {label:"Solar saved",dyn:dv.savings,unit:"money",dec:2,color:C.pv}]},
+   {t:"chart",kind:"bars",title:"Cost over time",unit:"money",span:8,series:[
+     {counter:"energymeter_consumed_total",label:"total",color:C.cons,cost:1},
+     {counter:"energymeter_grid_total",label:"grid",color:C.grid,cost:1}]},
  ]},
  {name:"🔎 Power quality", panels:[
    {t:"stat",title:"Power factor now",expr:M.pf,live:1,unit:"",dec:2,span:3,th:[[0,"var(--bad)"],[0.7,"var(--warn)"],[0.9,"var(--good)"]]},
@@ -227,9 +234,11 @@ const DESC={
  "PV power":"Live solar power (PV voltage × current). The dial fills toward the all-time peak, or your PV max from settings.",
  "Battery SoC":"Battery state of charge (%). Sub-line is the live battery voltage.",
  "Heatsink":"Inverter heatsink temperature. Green = normal, amber = warm, red = approaching over-temperature.",
- "Sources":"Live V, A and W for each source; the energy column is over the selected time range. Grid current is inferred (W ÷ V).",
+ "Sources":"Live V, A and W for each source, plus energy used today. Grid current is inferred (W ÷ V).",
  "Mode":"Inverter working mode — Line (from grid), Battery (off-grid), Bypass, etc.",
- "Status":"OK, or FAULT when any inverter warning/fault bit is active.",
+ "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
+ "Cost today":"Estimated cost of today's consumption (today's kWh × tariff).",
+ "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
  "Consumed":"Energy used by your loads over the selected time range.",
  "From battery":"Energy discharged from the battery over the selected range.",
@@ -377,7 +386,7 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
   head.addEventListener("click",()=>{ const on=grid.classList.toggle("hidden"); head.classList.toggle("collapsed",on); if(on)collapsed.add(sec.name);else collapsed.delete(sec.name); localStorage.setItem("collapsed",JSON.stringify([...collapsed])); if(!on)cards.forEach(c=>c.chart&&c.chart.draw()); });
   if(collapsed.has(sec.name)){ grid.classList.add("hidden"); head.classList.add("collapsed"); }
   for(const p of sec.panels){ const card=document.createElement("div");card.className="card"+(p.t==="chart"?" chart":"")+(p.t==="info"?" info":"");card.style.gridColumn="span "+(p.span||3);
-    const title=document.createElement("h3");title.textContent=p.title; const dsc=p.desc||DESC[p.title]; if(dsc)title.title=dsc; card.append(title);
+    const title=document.createElement("h3");title.textContent=p.title; const dsc=p.desc||DESC[p.title]; if(dsc)title.dataset.tip=dsc; card.append(title);
     if(p.t==="chart"){ const body=document.createElement("div");body.className="chartwrap"+(p.kind==="timeline"?" tl":"");card.append(body);
       const leg=document.createElement("div");leg.className="legend";card.append(leg);
       const legItems=(p.kind==="timeline"?Object.values(p.map).map(m=>({label:m[0],color:m[1]})):p.series).map(s=>{const sp=document.createElement("span");const ic=document.createElement("i");ic.style.background=resolveColor(s.color);sp.append(ic,document.createTextNode(s.label));leg.append(sp);return {ic,color:s.color};});
@@ -393,12 +402,12 @@ function renderStat(c){ const p=c.p,v=c.last; if(v===undefined){ c.el.innerHTML=
 function renderGauge(c){ const p=c.p; const setMax=(p.maxSetting==="pvmax"&&PVMAX>0)?PVMAX:0;
   const mx=setMax>0?setMax:((c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max);
   let sub=null;
-  if(setMax>0&&p.maxSetting==="pvmax") sub="макс "+fmt(setMax,"W");
+  if(setMax>0&&p.maxSetting==="pvmax") sub="max "+fmt(setMax,"W");
   else if(p.sub) sub=(p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec);
   gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th,sub); }
 function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>{
   let disp; if(it.map){ const m=it.map[Math.round(vals[i])]; disp=`<b style="color:${m?resolveColor(m[1]):'var(--muted)'};font-weight:700;font-size:1.05rem">${(vals[i]==null||!m)?'—':m[0]}</b>`; }
-  else disp=`<b style="color:${resolveColor(it.color||'var(--text)')};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b>`;
+  else { const cl=it.th?resolveColor(thColor(vals[i],it.th)||it.color||'var(--text)'):resolveColor(it.color||'var(--text)'); disp=`<b style="color:${cl};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b>`; }
   return `<div style="display:flex;justify-content:space-between;align-items:baseline;line-height:1.5"><span style="color:var(--muted);font-weight:600;font-size:.82rem">${it.label}</span>${disp}</div>`;}).join(""); }
 function renderTable(c){ const p=c.p, rows=c.last||[];
   let h='<div style="overflow-x:auto"><table style="width:100%;min-width:300px;border-collapse:collapse;font-size:.86rem"><thead><tr>'+
@@ -416,7 +425,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
   await Promise.all(cards.map(async c=>{ const p=c.p;
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
-        const series=await Promise.all(p.series.map(async s=>({...s, pts:(await qRange(`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}))); c.chart.setData(series); }
+        const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
       else { const series=await Promise.all(p.series.map(async s=>({...s,pts:await qRange(s.expr,from,to,st)}))); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
@@ -455,6 +464,18 @@ document.getElementById("themeBtn").addEventListener("click",()=>{ const t=curTh
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if(!localStorage.getItem("theme"))applyTheme(null); });
 applyTheme(localStorage.getItem("theme")||null);
 if(new URLSearchParams(location.search).has("kiosk")) document.body.classList.add("kiosk");
+
+// custom tooltips on card titles — hover on desktop, tap on touch (native title has neither styling nor touch)
+const tip=document.createElement("div"); tip.id="tip"; document.body.appendChild(tip);
+function showTip(el){ const t=el.dataset.tip; if(!t)return; tip.textContent=t; tip.style.display="block"; tip.dataset.for=t;
+  const r=el.getBoundingClientRect(),tw=tip.offsetWidth,th=tip.offsetHeight;
+  let x=Math.max(8,Math.min(r.left,innerWidth-tw-8)),y=r.bottom+6; if(y+th>innerHeight-8)y=Math.max(8,r.top-th-6);
+  tip.style.left=x+"px"; tip.style.top=y+"px"; }
+function hideTip(){ tip.style.display="none"; tip.dataset.for=""; }
+document.addEventListener("mouseover",e=>{ const h=e.target.closest&&e.target.closest("h3[data-tip]"); if(h)showTip(h); });
+document.addEventListener("mouseout",e=>{ const h=e.target.closest&&e.target.closest("h3[data-tip]"); if(h)hideTip(); });
+document.addEventListener("click",e=>{ const h=e.target.closest&&e.target.closest("h3[data-tip]"); if(h){ (tip.style.display==="block"&&tip.dataset.for===h.dataset.tip)?hideTip():showTip(h); } else hideTip(); });
+addEventListener("scroll",hideTip,true);
 
 let rz; new ResizeObserver(()=>{clearTimeout(rz);rz=setTimeout(()=>cards.forEach(c=>c.chart&&c.chart.draw()),120);}).observe(main);
 state.timer=setInterval(refresh,state.autoMs); refresh();
