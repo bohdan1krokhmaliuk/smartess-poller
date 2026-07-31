@@ -145,17 +145,16 @@ const FAULT_MAP={0:["OK","var(--good)"],1:["FAULT","var(--bad)"]};
 const CHG_SRC={0:["Idle","var(--muted)"],1:["☀ Solar","var(--good)"],2:["⚡ Grid","var(--accent)"],3:["Solar + Grid","var(--good)"]};
 
 const SECTIONS=[
- {name:"🔌 Device", panels:[{t:"info",title:"Inverter",span:12}]},
  {name:"⚡ Now", panels:[
-   {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
    {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",maxSetting:"pvmax",span:3,th:[[0,"#f59e0b"],[75,"var(--good)"]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"пік "}},
+   {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
    {t:"stat",title:"Heatsink",expr:M.temp,live:1,unit:"°C",span:3,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
-   {t:"table",title:"Sources",span:6,note:"Grid current is inferred (W ÷ V) — the inverter does not report it directly.",cols:["","V","A","W","today"],rows:[
-     {label:"PV",color:"#f59e0b",cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{expr:"energymeter_pv_today",unit:"eauto"}]},
-     {label:"Battery",color:"#22c55e",cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{expr:"energymeter_battery_out_today",unit:"eauto"}]},
-     {label:"Grid",color:"#3b82f6",cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{expr:"energymeter_grid_today",unit:"eauto"}]},
-     {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{expr:"energymeter_consumed_today",unit:"eauto"}]}]},
+   {t:"table",title:"Sources",span:6,note:"Energy column is over the selected time range (matches the Energy tiles). Grid current is inferred (W ÷ V).",cols:["","V","A","W","energy"],rows:[
+     {label:"PV",color:"#f59e0b",cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{dyn:dv.pv,unit:"eauto"}]},
+     {label:"Battery",color:"#22c55e",cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{dyn:dv.bat,unit:"eauto"}]},
+     {label:"Grid",color:"#3b82f6",cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{dyn:dv.grid,unit:"eauto"}]},
+     {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{dyn:dv.cons,unit:"eauto"}]}]},
    {t:"stat",title:"Mode",expr:M.mode,live:1,map:MODE_MAP,span:3},
    {t:"stat",title:"Status",expr:M.fault,live:1,map:FAULT_MAP,span:3},
  ]},
@@ -214,10 +213,11 @@ const SECTIONS=[
    {t:"chart",title:"Power factor",unit:"",min:0,max:1,dec:2,span:9,series:[{expr:M.pf,label:"PF",color:"#06b6d4",fill:1}]},
  ]},
  {name:"🌡️ Health & averages", panels:[
-   {t:"chart",title:"Heatsink temperature",unit:"°C",span:6,series:[{expr:M.temp,label:"temp",color:"#ef4444",fill:1}]},
+   {t:"chart",title:"Heatsink temperature",unit:"°C",span:6,series:[{expr:M.temp,label:"temp",color:"var(--good)",width:2,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
    {t:"chart",title:"Average load (1h / 24h)",unit:"W",span:4,series:[{expr:M.avg1h,label:"avg 1h",color:"#3b82f6"},{expr:M.avg24h,label:"avg 24h",color:"#a855f7"}]},
    {t:"stat",title:"Min SoC",dyn:dv.minSoc,unit:"%",span:2,th:[[0,"var(--bad)"],[20,"var(--warn)"],[40,"var(--good)"]]},
  ]},
+ {name:"🔌 Device", panels:[{t:"info",title:"Inverter",span:12}]},
 ];
 
 const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -314,7 +314,9 @@ class Chart{
     const gap=this.stepMs*2.5;
     this.series.forEach(s=>{ if(!s.pts.length)return; const Y=s.axis==="right"?YR:YL,col=resolveColor(s.color);
       segs(s.pts,gap).forEach(seg=>{ if(s.fill&&seg.length>1){ x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.lineTo(X(seg[seg.length-1][0]),base);x.lineTo(X(seg[0][0]),base);x.closePath();x.fillStyle=hexA(col,.16);x.fill(); }
-        x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.strokeStyle=col;x.lineWidth=s.width||1.4;x.lineJoin="round";x.stroke(); }); });
+        x.lineJoin="round";x.lineCap="round";x.lineWidth=s.width||1.4;
+        if(s.th){ for(let i=1;i<seg.length;i++){ const a=seg[i-1],b=seg[i]; x.strokeStyle=resolveColor(thColor(Math.max(a[1],b[1]),s.th)||s.color); x.beginPath();x.moveTo(X(a[0]),Y(a[1]));x.lineTo(X(b[0]),Y(b[1]));x.stroke(); } }
+        else { x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.strokeStyle=col;x.stroke(); } }); });
     this._X=X; this.drawOv();
   }
   drawOv(){ const c=this.ov,dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight,g=this.geom(); const x=c.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,w,h);
@@ -378,7 +380,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
       else { const series=await Promise.all(p.series.map(async s=>({...s,pts:await qRange(s.expr,from,to,st)}))); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
-    else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.expr,now))))); renderTable(c); }
+    else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?evalT:now))))); renderTable(c); }
     else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
