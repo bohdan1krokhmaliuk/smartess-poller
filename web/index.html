@@ -193,6 +193,7 @@ const SECTIONS=[
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
    {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",maxSetting:"pvmax",span:3,th:[[0,C.pv]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"peak "}},
    {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
+   {t:"gauge",title:"BMS SoC",optional:1,expr:"bms_soc and (time()-timestamp(bms_soc) < 90)",live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:"bms_pack_voltage",unit:"V",dec:2}},
    {t:"multi",title:"Status",span:3,items:[
      {label:"Mode",expr:M.mode,live:1,map:MODE_MAP},
      {label:"Health",expr:M.fault,live:1,map:FAULT_MAP},
@@ -259,12 +260,13 @@ const SECTIONS=[
    {t:"multi",title:"Headroom",span:3,items:[
      {label:"Available now",client:"availNow",unit:"W",color:"#3b82f6"},
      {label:"Spare now",client:"spareNow",unit:"W",color:C.pv},
-     {label:"Unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
+     {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
+     {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
+     {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
    {t:"chart",pvhead:1,title:"Produced / available / unused (W)",unit:"W",span:9,series:[
      {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"}]},
    {t:"sky",title:"Sun path & sky",span:3},
-   {t:"stat",title:"PV peak",dyn:dv.pvPeak,unit:"W",span:3},
  ]},
  {name:"📈 History & state", panels:[
    {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
@@ -303,12 +305,13 @@ const DESC={
  "Load":"Inverter output load as a % of its rated power. Sub-line is live output in watts.",
  "PV power":"Live solar power. Green arc = producing now, blue arc = available now (weather-model irradiance for your array, so it already reflects cloud cover), dial max = your PV max or the array nameplate. Sub-line shows the available power.",
  "Battery SoC":"Battery state of charge (%). Sub-line is the live battery voltage.",
+ "BMS SoC":"True state of charge from the battery's own BMS (appears only while the BMS is connected). Sub-line is total pack voltage.",
  "Heatsink":"Inverter heatsink temperature. Green = normal, amber = warm, red = approaching over-temperature.",
  "Sources":"Live V, A and W for each source, plus energy used today. Grid current is inferred (W ÷ V).",
  "Mode":"Inverter working mode — Line (from grid), Battery (off-grid), Bypass, etc.",
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
- "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; Unused today = solar you didn't use (est.); Cloud = current cloud cover.",
+ "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available so far today; Appx unused today = the part you didn't use (est.); Cloud = current cloud cover.",
  "Produced / available / unused (W)":"Actual PV (green) vs clear-sky available (blue) over time; the shaded gap is solar you could have used but didn't.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
@@ -472,11 +475,15 @@ class Chart{
 }
 
 const main=document.getElementById("main"),cards=[]; const collapsed=new Set(JSON.parse(localStorage.getItem("collapsed")||"[]"));
-for(const sec of SECTIONS){ const head=document.createElement("div");head.className="section";head.innerHTML=`<span class="caret">▾</span> ${sec.name}`; main.append(head);
+for(const sec of SECTIONS){ const head=document.createElement("div");head.className="section";head.innerHTML=`<span class="caret">▾</span> ${sec.name}`;
+  if(sec.bms){ const tg=document.createElement("span"); tg.id="bmsToggle"; tg.textContent="⏻ BMS"; tg.style.cssText="margin-left:auto;font-size:.66rem;padding:2px 8px;border:1px solid var(--grid);border-radius:10px;cursor:pointer;color:var(--muted);text-transform:none;letter-spacing:0";
+    tg.title="Connect / disconnect the BMS over Bluetooth (disconnect to use the JK phone app; also auto-off when the inverter is offline)";
+    tg.addEventListener("click",ev=>{ ev.stopPropagation(); const on=tg.dataset.on==="1"; fetch("/bms/"+(on?"off":"on")).catch(()=>{}); tg.textContent="⏳ BMS"; }); head.append(tg); }
+  main.append(head);
   const grid=document.createElement("div");grid.className="grid";main.append(grid);
   head.addEventListener("click",()=>{ const on=grid.classList.toggle("hidden"); head.classList.toggle("collapsed",on); if(on)collapsed.add(sec.name);else collapsed.delete(sec.name); localStorage.setItem("collapsed",JSON.stringify([...collapsed])); if(!on)cards.forEach(c=>c.chart&&c.chart.draw()); });
   if(collapsed.has(sec.name)){ grid.classList.add("hidden"); head.classList.add("collapsed"); }
-  for(const p of sec.panels){ const card=document.createElement("div");card.className="card"+(p.t==="chart"?" chart":"")+(p.t==="info"?" info":"");card.style.gridColumn="span "+(p.span||3);
+  for(const p of sec.panels){ const card=document.createElement("div");card.className="card"+(p.t==="chart"?" chart":"")+(p.t==="info"?" info":"");card.style.gridColumn="span "+(p.span||3); if(p.optional)card.style.display="none";
     const title=document.createElement("h3");title.textContent=p.title; const dsc=p.desc||DESC[p.title]; if(dsc)title.dataset.tip=dsc; card.append(title);
     if(p.t==="chart"){ const body=document.createElement("div");body.className="chartwrap"+(p.kind==="timeline"?" tl":"");card.append(body);
       const leg=document.createElement("div");leg.className="legend";card.append(leg);
@@ -554,6 +561,8 @@ const CLIENT={
   unusedKwh: async()=>{ if(pvPotentialW()==null)return null; const to=Date.now(),from=new Date().setHours(0,0,0,0),step=300;
     const pv=await qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step); let wh=0;
     for(const [t,v] of pv){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=Math.max(0,a-v)*step/3600; } return wh/1000; },
+  solarToday: async()=>{ if(pvPotentialW()==null)return null; const to=Date.now(),from=new Date().setHours(0,0,0,0),step=300000; let wh=0;   // modelled available solar energy so far today (kWh)
+    for(let t=from;t<=to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
 };
 
 function renderSky(c){ const el=c.el;
@@ -597,10 +606,11 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
     else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?evalT:now))))); renderTable(c); }
     else if(p.t==="cells"){ c.last=await Promise.all(Array.from({length:p.n},(_,i)=>qInstant(p.prefix+(i+1),now))); renderCells(c); }
-    else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
+    else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.optional)c.card.style.display=(c.last==null?"none":""); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
+  { const tg=document.getElementById("bmsToggle"); if(tg){ const fresh=await qInstant("bms_soc and (time()-timestamp(bms_soc) < 90)",Date.now()); const on=fresh!=null; tg.dataset.on=on?"1":"0"; tg.textContent="⏻ BMS"; tg.style.color=on?"var(--good)":"var(--muted)"; tg.style.borderColor=on?"var(--good)":"var(--grid)"; } }
   loadMode();
 }
 
