@@ -138,6 +138,14 @@ function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
   return Math.round(PVKWP*POA*0.85); }
 function pvPotentialW(){ return pvPotentialAt(new Date()); }
 
+// settings shared across clients via the poller's /settings (localStorage is the local cache)
+const SKEYS=["tariff","currency","pvmax","pvlat","pvlon","pvkwp","pvtilt","pvaz","agg"];
+function readSettings(){ TARIFF=parseFloat(localStorage.getItem("tariff")||"4.32")||0; CUR=localStorage.getItem("currency")||"₴"; PVMAX=parseFloat(localStorage.getItem("pvmax")||"0")||0; AGG=localStorage.getItem("agg")||"avg"; PVLAT=gnum("pvlat"); PVLON=gnum("pvlon"); PVKWP=gnum("pvkwp")||0; PVTILT=gnum("pvtilt"); PVAZ=gnum("pvaz"); }
+function collectSettings(){ const o={}; SKEYS.forEach(k=>{ const v=localStorage.getItem(k); o[k]=(v==null?"":v); }); return o; }
+function applyServer(o){ SKEYS.forEach(k=>{ if(!(k in o))return; const v=o[k]; if(v===""||v==null)localStorage.removeItem(k); else localStorage.setItem(k,v); }); readSettings(); }
+async function loadServerSettings(){ try{ const o=await (await fetch("/settings")).json(); if(o&&typeof o==="object"&&Object.keys(o).length) applyServer(o); }catch(e){} }
+async function saveServerSettings(){ try{ await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collectSettings())}); }catch(e){} }
+
 const M={
   soc:"inverter_battery_capacity", loadpct:"inverter_output_load_percent",
   batV:"inverter_battery_voltage", load:"inverter_ac_output_active_power", apparent:"inverter_ac_output_apparent_power",
@@ -539,7 +547,7 @@ document.getElementById("cfgApply").addEventListener("click",()=>{ const V=id=>d
   TARIFF=parseFloat(V("tariff"))||0; CUR=V("currency")||"₴"; PVMAX=parseFloat(V("pvmax"))||0; localStorage.setItem("tariff",TARIFF); localStorage.setItem("currency",CUR); localStorage.setItem("pvmax",PVMAX);
   PVLAT=setNum("pvlat","pvlat"); PVLON=setNum("pvlon","pvlon"); PVKWP=setNum("pvkwp","pvkwp")||0; PVTILT=setNum("pvtilt","pvtilt"); PVAZ=setNum("pvaz","pvaz");
   AGG=V("agg")||"avg"; localStorage.setItem("agg",AGG);
-  cfgPop.classList.remove("open"); cfgBtn.classList.remove("on"); fetchWeather(); refresh(); });
+  cfgPop.classList.remove("open"); cfgBtn.classList.remove("on"); saveServerSettings(); fetchWeather(); refresh(); });
 document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classList.remove("open");cbtn.classList.remove("on"); cfgPop.classList.remove("open");cfgBtn.classList.remove("on"); } });
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
@@ -563,8 +571,9 @@ document.addEventListener("click",e=>{ const h=e.target.closest&&e.target.closes
 addEventListener("scroll",hideTip,true);
 
 let rz; new ResizeObserver(()=>{clearTimeout(rz);rz=setTimeout(()=>cards.forEach(c=>c.chart&&c.chart.draw()),120);}).observe(main);
-fetchWeather(); setInterval(fetchWeather, 900000);
-state.timer=setInterval(refresh,state.autoMs); refresh();
+setInterval(fetchWeather, 900000);
+state.timer=setInterval(refresh,state.autoMs);
+loadServerSettings().then(()=>{ fetchWeather(); refresh(); });
 </script>
 </body>
 </html>

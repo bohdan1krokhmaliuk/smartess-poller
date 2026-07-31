@@ -108,6 +108,8 @@ QVFW3 = bytes.fromhex("ff045156465733d3d40d")   # secondary firmware (static)
 INFO = {}
 # rated charge targets from QPIRI, surfaced as metrics for the dashboard
 RATED = {}
+# dashboard settings shared across clients (served/saved at /settings)
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_settings.json")
 
 # QPIGS fields, in order, per the Voltronic PI30 spec.
 QPIGS_FIELDS = [
@@ -681,6 +683,15 @@ def start_control_server(port, state, state_lock, set_mode):
                 self._reply(200, "application/json", json.dumps(INFO))
                 return
 
+            if path == "/settings":
+                try:
+                    with open(SETTINGS_FILE) as f:
+                        body = f.read()
+                except Exception:
+                    body = "{}"
+                self._reply(200, "application/json", body)
+                return
+
             if path in ("/", "/index.html"):
                 try:
                     with open(os.path.join(web_dir, "index.html"), "rb") as f:
@@ -689,6 +700,26 @@ def start_control_server(port, state, state_lock, set_mode):
                     self._reply(404, "text/plain", "dashboard not found (web/index.html)")
                 return
 
+            self._reply(404, "text/plain", "not found")
+
+        def do_POST(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/settings":
+                try:
+                    n = int(self.headers.get("Content-Length", 0) or 0)
+                    if n <= 0 or n > 8192:
+                        raise ValueError("bad length")
+                    data = json.loads(self.rfile.read(n).decode("utf-8"))
+                    if not isinstance(data, dict):
+                        raise ValueError("not an object")
+                    tmp = SETTINGS_FILE + ".tmp"
+                    with open(tmp, "w") as f:
+                        json.dump(data, f)
+                    os.replace(tmp, SETTINGS_FILE)
+                    self._reply(200, "application/json", json.dumps({"ok": True}))
+                except Exception as e:
+                    self._reply(400, "application/json", json.dumps({"error": str(e)}))
+                return
             self._reply(404, "text/plain", "not found")
 
         def log_message(self, *args):

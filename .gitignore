@@ -24,3 +24,4 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+.dashboard_settings.json
