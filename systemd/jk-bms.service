@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PYTHONUNBUFFERED=1
 # Replace /path/to with the absolute path to the cloned repo, e.g. /home/pi/smartess-poller
 WorkingDirectory=/path/to
 ExecStart=/usr/bin/python3 /path/to/bms/jk_bms.py
