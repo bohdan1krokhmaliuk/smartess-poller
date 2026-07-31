@@ -236,6 +236,24 @@ const SECTIONS=[
    {t:"chart",title:"Charge / discharge current",unit:"A",span:6,series:[{expr:M.chg,label:"charge",color:"#22c55e"},{expr:M.dis,label:"discharge",color:"#ef4444"}]},
    {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:6,series:[{expr:M.netbat,label:"net",color:"#06b6d4",fill:1}]},
  ]},
+ {name:"🔋 Battery pack (BMS)", bms:1, panels:[
+   {t:"gauge",title:"Pack SoC",expr:"bms_soc",live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:"bms_pack_voltage",unit:"V",dec:2}},
+   {t:"gauge",title:"Health (SoH)",expr:"bms_soh",live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[70,"var(--warn)"],[90,"var(--good)"]],sub:{expr:"bms_cycles",unit:"",dec:0,pre:"cyc "}},
+   {t:"multi",title:"Pack",span:6,items:[
+     {label:"Voltage",expr:"bms_pack_voltage",live:1,unit:"V",dec:2,color:"var(--text)"},
+     {label:"Current",expr:"bms_current",live:1,unit:"A",dec:1,color:"var(--text)"},
+     {label:"Power",expr:"bms_power",live:1,unit:"W",color:"var(--text)"},
+     {label:"Remaining",expr:"bms_remaining_ah",live:1,unit:"Ah",dec:1,color:C.bat},
+     {label:"Capacity",expr:"bms_nominal_ah",live:1,unit:"Ah",dec:1,color:"var(--muted)"},
+     {label:"Balancing",expr:"bms_balance_current",live:1,unit:"A",dec:2,color:"var(--muted)"}]},
+   {t:"cells",title:"Cells",span:6,n:16,prefix:"bms_cell_"},
+   {t:"multi",title:"Temperatures",span:3,items:[
+     {label:"Battery 1",expr:"bms_temp_1",live:1,unit:"°C",dec:1,th:[[0,"var(--good)"],[40,"var(--warn)"],[55,"var(--bad)"]]},
+     {label:"Battery 2",expr:"bms_temp_2",live:1,unit:"°C",dec:1,th:[[0,"var(--good)"],[40,"var(--warn)"],[55,"var(--bad)"]]},
+     {label:"MOSFET",expr:"bms_temp_mos",live:1,unit:"°C",dec:1,th:[[0,"var(--good)"],[55,"var(--warn)"],[75,"var(--bad)"]]}]},
+   {t:"chart",title:"Cell spread (mV)",unit:"mV",span:3,series:[{expr:"bms_cell_delta*1000",label:"Δ",color:"#a855f7",fill:1}]},
+   {t:"chart",title:"SoC & pack voltage",span:12,series:[{expr:"bms_pack_voltage",label:"voltage",color:"#3b82f6",unit:"V"},{expr:"bms_soc",label:"SoC",color:C.bat,unit:"%",axis:"right",min:0,max:100}]},
+ ]},
  {name:"☀️ Solar", panels:[
    {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#ef4444",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
    {t:"multi",title:"Headroom",span:3,items:[
@@ -311,6 +329,13 @@ const DESC={
  "SoC & voltage":"Battery charge (%) and terminal voltage over time.",
  "Charge / discharge current":"Battery charge and discharge current over time.",
  "Net battery power (+charge / −discharge)":"Net battery power — positive while charging, negative while discharging.",
+ "Pack SoC":"True state of charge from the BMS itself (more accurate than the inverter's voltage-based estimate). Sub-line is total pack voltage.",
+ "Health (SoH)":"Battery state of health (%) from the BMS, with the total charge-cycle count. 100% = full rated capacity.",
+ "Pack":"Live from the BMS: pack voltage, current (>0 charging, <0 discharging), power, remaining vs rated capacity, and balancing current.",
+ "Cells":"Per-cell voltage from the BMS. Bars are zoomed to the current spread — the highest cell is red, the lowest blue. A large Δ (spread) means the pack needs balancing.",
+ "Temperatures":"BMS temperatures — two battery probes and the MOSFET/board temperature.",
+ "Cell spread (mV)":"Gap between the highest and lowest cell (mV) over time. Small = well balanced; a growing spread flags a weak cell.",
+ "SoC & pack voltage":"Battery charge (%, from the BMS) and total pack voltage over time.",
  "PV voltage / current / power":"Solar array voltage, current and power (V×I) over time.",
  "PV peak":"Highest solar power seen over the selected range.",
  "Voltages (grid / output / bus)":"Grid input, inverter AC output and internal DC bus voltages over time.",
@@ -338,6 +363,7 @@ function fmt(v,unit,dec){
   if(u==="eauto")return Math.abs(v)<1?(v*1000).toFixed(0)+" Wh":v.toFixed(2)+" kWh";
   if(u==="%")return v.toFixed(dec??0)+" %"; if(u==="°C")return v.toFixed(dec??0)+" °C";
   if(u==="V")return v.toFixed(dec??1)+" V"; if(u==="A")return v.toFixed(dec??1)+" A"; if(u==="Hz")return v.toFixed(dec??2)+" Hz";
+  if(u==="Ah")return v.toFixed(dec??1)+" Ah"; if(u==="mV")return Math.round(v)+" mV";
   return dec!=null?v.toFixed(dec):(""+Math.round(v*100)/100);
 }
 function thColor(v,th){ if(th==null||v==null)return null; let c=null; for(const [t,col] of th){ if(v>=t)c=col; } return c; }
@@ -456,7 +482,7 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
       const leg=document.createElement("div");leg.className="legend";card.append(leg);
       const legItems=(p.kind==="timeline"?Object.values(p.map).map(m=>({label:m[0],color:m[1]})):p.series).map(s=>{const sp=document.createElement("span");const ic=document.createElement("i");ic.style.background=resolveColor(s.color);sp.append(ic,document.createTextNode(s.label));leg.append(sp);return {ic,color:s.color};});
       cards.push({p,card,chart:new Chart(body,p),legItems});
-    } else { const body=document.createElement("div");body.className=p.t==="gauge"?"gauge":((p.t==="table"||p.t==="sky")?"tbl":"val");if(p.t!=="gauge"&&p.t!=="table"&&p.t!=="sky")body.textContent="—";card.append(body);cards.push({p,card,el:body,last:null}); }
+    } else { const body=document.createElement("div");body.className=p.t==="gauge"?"gauge":((p.t==="table"||p.t==="sky"||p.t==="cells")?"tbl":"val");if(p.t!=="gauge"&&p.t!=="table"&&p.t!=="sky"&&p.t!=="cells")body.textContent="—";card.append(body);cards.push({p,card,el:body,last:null}); }
     grid.append(card);
   }
 }
@@ -486,6 +512,23 @@ function renderTable(c){ const p=c.p, rows=c.last||[];
   c.el.innerHTML=h; }
 function renderInfo(c){ const i=c.last||{}; c.el.innerHTML = (i.model||i.serial||i.firmware) ?
   `<b>Model</b> ${i.model||"—"} &nbsp;·&nbsp; <b>Serial</b> ${i.serial||"—"} &nbsp;·&nbsp; <b>Protocol</b> ${i.protocol||"—"} &nbsp;·&nbsp; <b>FW</b> ${i.firmware||"—"}` : "—"; }
+function renderCells(c){ const vals=c.last||[];
+  const present=vals.map((v,i)=>({i,v})).filter(x=>x.v!=null&&isFinite(x.v));
+  if(!present.length){ c.el.innerHTML='<span class="err" style="color:var(--muted)">— no BMS data</span>'; return; }
+  const vs=present.map(x=>x.v), mn=Math.min(...vs), mx=Math.max(...vs);
+  const lo=mn-0.005, hi=Math.max(mx+0.005, lo+0.02);   // zoom the bars to the current spread so balance is visible
+  let mnI=present[0].i, mxI=present[0].i; present.forEach(x=>{ if(x.v<vals[mnI])mnI=x.i; if(x.v>vals[mxI])mxI=x.i; });
+  const avg=vs.reduce((a,b)=>a+b,0)/vs.length, delta=Math.round((mx-mn)*1000);
+  let h=`<div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--muted);margin-bottom:6px">`+
+    `<span>avg <b style="color:var(--text)">${avg.toFixed(3)}</b> V · Δ <b style="color:var(--text)">${delta}</b> mV</span>`+
+    `<span><span style="color:#3b82f6">min C${mnI+1}</span> · <span style="color:#ef4444">max C${mxI+1}</span></span></div>`;
+  h+=vals.map((v,i)=>{ if(v==null||!isFinite(v))return "";
+    const f=Math.max(0,Math.min(1,(v-lo)/(hi-lo))), col=i===mxI?"#ef4444":i===mnI?"#3b82f6":resolveColor(C.pv);
+    return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;font-size:.76rem">`+
+      `<span style="width:20px;color:var(--muted);text-align:right">${i+1}</span>`+
+      `<span style="flex:1;height:9px;background:var(--grid);border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${(f*100).toFixed(1)}%;background:${col};transition:width .3s"></span></span>`+
+      `<b style="width:50px;text-align:right;font-variant-numeric:tabular-nums">${v.toFixed(3)}</b></div>`; }).join("");
+  c.el.innerHTML=h; }
 
 // weather (cloud cover) from Open-Meteo — free, no key, CORS-enabled; optional
 let WEATHER=null;
@@ -553,6 +596,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     else if(p.t==="sky"){ renderSky(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
     else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?evalT:now))))); renderTable(c); }
+    else if(p.t==="cells"){ c.last=await Promise.all(Array.from({length:p.n},(_,i)=>qInstant(p.prefix+(i+1),now))); renderCells(c); }
     else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
@@ -589,7 +633,7 @@ document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classL
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
 function applyTheme(t){ if(t)document.documentElement.setAttribute("data-theme",t); else document.documentElement.removeAttribute("data-theme"); document.getElementById("themeBtn").textContent=curTheme()==="dark"?"☀️":"🌙";
-  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="info") renderInfo(c); else if(c.p.t==="multi") renderMulti(c); else if(c.p.t==="table") renderTable(c); else if(c.p.t==="sky") renderSky(c); else renderStat(c); }); }
+  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="info") renderInfo(c); else if(c.p.t==="multi") renderMulti(c); else if(c.p.t==="table") renderTable(c); else if(c.p.t==="cells") renderCells(c); else if(c.p.t==="sky") renderSky(c); else renderStat(c); }); }
 document.getElementById("themeBtn").addEventListener("click",()=>{ const t=curTheme()==="dark"?"light":"dark"; localStorage.setItem("theme",t); applyTheme(t); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if(!localStorage.getItem("theme"))applyTheme(null); });
 applyTheme(localStorage.getItem("theme")||null);
