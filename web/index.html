@@ -149,7 +149,7 @@ const SECTIONS=[
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
    {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",span:3,th:[[0,"#f59e0b"]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"пік "}},
    {t:"stat",title:"Heatsink",expr:M.temp,live:1,unit:"°C",span:3,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
-   {t:"table",title:"Sources",span:6,cols:["","V","A","W","today"],rows:[
+   {t:"table",title:"Sources",span:6,note:"Grid current is inferred (W ÷ V) — the inverter does not report it directly.",cols:["","V","A","W","today"],rows:[
      {label:"PV",color:"#f59e0b",cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{expr:"energymeter_pv_today",unit:"eauto"}]},
      {label:"Battery",color:"#22c55e",cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{expr:"energymeter_battery_out_today",unit:"eauto"}]},
      {label:"Grid",color:"#3b82f6",cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{expr:"energymeter_grid_today",unit:"eauto"}]},
@@ -357,7 +357,8 @@ function renderTable(c){ const p=c.p, rows=c.last||[];
     h+=`<tr><td style="text-align:left;padding:5px;border-top:1px solid var(--grid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${resolveColor(r.color)};margin-right:7px;vertical-align:middle"></span><b style="font-weight:600">${r.label}</b></td>`;
     r.cells.forEach((cell,ci)=>{ h+=`<td style="text-align:right;padding:5px;border-top:1px solid var(--grid);font-variant-numeric:tabular-nums;font-weight:600">${fmt(vals[ci],cell.unit,cell.dec)}</td>`; });
     h+='</tr>'; });
-  c.el.innerHTML=h+'</tbody></table></div>'; }
+  h+='</tbody></table></div>'; if(p.note)h+=`<div style="color:var(--muted);font-size:.68rem;margin-top:5px">${p.note}</div>`;
+  c.el.innerHTML=h; }
 function renderInfo(c){ const i=c.last||{}; c.el.innerHTML = (i.model||i.serial||i.firmware) ?
   `<b>Model</b> ${i.model||"—"} &nbsp;·&nbsp; <b>Serial</b> ${i.serial||"—"} &nbsp;·&nbsp; <b>Protocol</b> ${i.protocol||"—"} &nbsp;·&nbsp; <b>FW</b> ${i.firmware||"—"}` : "—"; }
 
