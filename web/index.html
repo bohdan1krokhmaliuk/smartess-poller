@@ -73,7 +73,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .err{color:var(--bad); font-size:.75rem}
 .banner{display:none; background:var(--bad); color:#fff; text-align:center; padding:.4rem; font-size:.82rem; font-weight:600}
 .banner.show{display:block}
-@media (max-width:820px){ .card{grid-column:span 6 !important} .card.chart,.card.info{grid-column:span 12 !important} }
+@media (max-width:820px){ .card{grid-column:span 6 !important} .card.chart,.card.info,.card.dual{grid-column:span 12 !important} }
 </style>
 </head>
 <body>
@@ -192,7 +192,9 @@ const SECTIONS=[
  {name:"⚡ Now", panels:[
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
    {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",maxSetting:"pvmax",span:3,th:[[0,C.pv]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"peak "}},
-   {t:"gauge",title:"Battery SoC",expr:"sum(bms_soc and (time()-timestamp(bms_soc) < 90)) or sum(inverter_battery_capacity)",live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
+   {t:"gauge2",title:"Battery SoC",span:6,gauges:[
+     {label:"Inverter",expr:M.soc,unit:"%",min:0,max:100,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,unit:"V",dec:2}},
+     {label:"BMS",expr:"bms_soc and (time()-timestamp(bms_soc) < 90)",unit:"%",min:0,max:100,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:"bms_pack_voltage",unit:"V",dec:2}}]},
    {t:"multi",title:"Status",span:3,items:[
      {label:"Mode",expr:M.mode,live:1,map:MODE_MAP},
      {label:"Health",expr:M.fault,live:1,map:FAULT_MAP},
@@ -303,7 +305,7 @@ const SECTIONS=[
 const DESC={
  "Load":"Inverter output load as a % of its rated power. Sub-line is live output in watts.",
  "PV power":"Live solar power. Green arc = producing now, blue arc = available now (weather-model irradiance for your array, so it already reflects cloud cover), dial max = your PV max or the array nameplate. Sub-line shows the available power.",
- "Battery SoC":"Battery charge (%). Shows the BMS's true SoC when the BMS is connected, otherwise the inverter's voltage-based estimate. Sub-line is battery voltage.",
+ "Battery SoC":"Battery charge (%): the inverter's estimate (left) next to the BMS's true value (right, shown while the BMS is connected). Sub-line is battery voltage.",
  "Heatsink":"Inverter heatsink temperature. Green = normal, amber = warm, red = approaching over-temperature.",
  "Sources":"Live V, A and W for each source, plus energy used today. Grid current is inferred (W ÷ V).",
  "Mode":"Inverter working mode — Line (from grid), Battery (off-grid), Bypass, etc.",
@@ -481,13 +483,13 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
   const grid=document.createElement("div");grid.className="grid";main.append(grid);
   head.addEventListener("click",()=>{ const on=grid.classList.toggle("hidden"); head.classList.toggle("collapsed",on); if(on)collapsed.add(sec.name);else collapsed.delete(sec.name); localStorage.setItem("collapsed",JSON.stringify([...collapsed])); if(!on)cards.forEach(c=>c.chart&&c.chart.draw()); });
   if(collapsed.has(sec.name)){ grid.classList.add("hidden"); head.classList.add("collapsed"); }
-  for(const p of sec.panels){ const card=document.createElement("div");card.className="card"+(p.t==="chart"?" chart":"")+(p.t==="info"?" info":"");card.style.gridColumn="span "+(p.span||3); if(p.optional)card.style.display="none";
+  for(const p of sec.panels){ const card=document.createElement("div");card.className="card"+(p.t==="chart"?" chart":"")+(p.t==="info"?" info":"")+(p.t==="gauge2"?" dual":"");card.style.gridColumn="span "+(p.span||3); if(p.optional)card.style.display="none";
     const title=document.createElement("h3");title.textContent=p.title; const dsc=p.desc||DESC[p.title]; if(dsc)title.dataset.tip=dsc; card.append(title);
     if(p.t==="chart"){ const body=document.createElement("div");body.className="chartwrap"+(p.kind==="timeline"?" tl":"");card.append(body);
       const leg=document.createElement("div");leg.className="legend";card.append(leg);
       const legItems=(p.kind==="timeline"?Object.values(p.map).map(m=>({label:m[0],color:m[1]})):p.series).map(s=>{const sp=document.createElement("span");const ic=document.createElement("i");ic.style.background=resolveColor(s.color);sp.append(ic,document.createTextNode(s.label));leg.append(sp);return {ic,color:s.color};});
       cards.push({p,card,chart:new Chart(body,p),legItems});
-    } else { const body=document.createElement("div");body.className=p.t==="gauge"?"gauge":((p.t==="table"||p.t==="sky"||p.t==="cells")?"tbl":"val");if(p.t!=="gauge"&&p.t!=="table"&&p.t!=="sky"&&p.t!=="cells")body.textContent="—";card.append(body);cards.push({p,card,el:body,last:null}); }
+    } else { const body=document.createElement("div");body.className=p.t==="gauge"?"gauge":((p.t==="table"||p.t==="sky"||p.t==="cells")?"tbl":"val");if(p.t!=="gauge"&&p.t!=="gauge2"&&p.t!=="table"&&p.t!=="sky"&&p.t!=="cells")body.textContent="—";card.append(body);cards.push({p,card,el:body,last:null}); }
     grid.append(card);
   }
 }
@@ -534,6 +536,11 @@ function renderCells(c){ const vals=c.last||[];
       `<span style="flex:1;height:9px;background:var(--grid);border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${(f*100).toFixed(1)}%;background:${col};transition:width .3s"></span></span>`+
       `<b style="width:50px;text-align:right;font-variant-numeric:tabular-nums">${v.toFixed(3)}</b></div>`; }).join("");
   c.el.innerHTML=h; }
+function renderGauge2(c){ const p=c.p, vals=c.last||[], subs=c.subv||[];   // two gauges side by side in one card
+  c.el.style.cssText="display:flex;gap:.3rem;align-items:flex-start;justify-content:center";
+  c.el.innerHTML=p.gauges.map((g,i)=>`<div class="gauge" style="flex:1;min-width:0"><div style="font-size:.62rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em">${g.label}</div><div class="g2s" data-i="${i}" style="width:100%"></div></div>`).join("");
+  p.gauges.forEach((g,i)=>{ const el=c.el.querySelector('.g2s[data-i="'+i+'"]'); const sub=g.sub?(g.sub.pre||"")+fmt(subs[i],g.sub.unit,g.sub.dec):null;
+    gaugeSVG(el,vals[i],g.min,g.max,g.unit,g.dec,g.th,sub,null,null,null,null,null); }); }
 
 // weather (cloud cover) from Open-Meteo — free, no key, CORS-enabled; optional
 let WEATHER=null;
@@ -605,6 +612,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?evalT:now))))); renderTable(c); }
     else if(p.t==="cells"){ c.last=await Promise.all(Array.from({length:p.n},(_,i)=>qInstant(p.prefix+(i+1),now))); renderCells(c); }
     else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.optional)c.card.style.display=(c.last==null?"none":""); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
+    else if(p.t==="gauge2"){ c.last=await Promise.all(p.gauges.map(g=>qInstant(g.expr,now))); c.subv=await Promise.all(p.gauges.map(g=>g.sub?qInstant(g.sub.expr,now):null)); renderGauge2(c); }
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
@@ -641,7 +649,7 @@ document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classL
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
 function applyTheme(t){ if(t)document.documentElement.setAttribute("data-theme",t); else document.documentElement.removeAttribute("data-theme"); document.getElementById("themeBtn").textContent=curTheme()==="dark"?"☀️":"🌙";
-  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="info") renderInfo(c); else if(c.p.t==="multi") renderMulti(c); else if(c.p.t==="table") renderTable(c); else if(c.p.t==="cells") renderCells(c); else if(c.p.t==="sky") renderSky(c); else renderStat(c); }); }
+  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="gauge2") renderGauge2(c); else if(c.p.t==="info") renderInfo(c); else if(c.p.t==="multi") renderMulti(c); else if(c.p.t==="table") renderTable(c); else if(c.p.t==="cells") renderCells(c); else if(c.p.t==="sky") renderSky(c); else renderStat(c); }); }
 document.getElementById("themeBtn").addEventListener("click",()=>{ const t=curTheme()==="dark"?"light":"dark"; localStorage.setItem("theme",t); applyTheme(t); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if(!localStorage.getItem("theme"))applyTheme(null); });
 applyTheme(localStorage.getItem("theme")||null);
