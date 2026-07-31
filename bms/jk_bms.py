@@ -67,6 +67,8 @@ def parse_cell_info(f):
         "cell_max":          max(cells),
         "cell_avg":          u16(58) / 1000,
         "cell_delta":        u16(60) / 1000,
+        "balance_current":   i16(138) / 1000,     # >0 balancing (0 when cells are even)
+        "balance_action":    f[140],              # 0 off, 1 balancing on charge, 2 on discharge
         "pack_voltage":      pack,
         "current":           cur,
         "power":             round(pack * cur, 1),

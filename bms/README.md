@@ -94,6 +94,8 @@ engineered and CRC-verified on a JK-BD6A17S6P:
 |---|---|---|---|
 | cell N voltage               | 6 + 2·(N-1) | u16 LE | mV |
 | avg / delta cell voltage     | 58 / 60     | u16 LE | mV |
+| balance current              | 138         | i16 LE | mA (>0 balancing) |
+| balance action               | 140         | u8     | 0 off / 1 charge / 2 discharge |
 | pack voltage                 | 118         | u32 LE | mV |
 | current                      | 126         | i32 LE | mA (>0 charge) |
 | temperature probe 1 / 2      | 130 / 132   | i16 LE | 0.1 °C |
