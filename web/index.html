@@ -537,8 +537,8 @@ function renderCells(c){ const vals=c.last||[];
       `<b style="width:50px;text-align:right;font-variant-numeric:tabular-nums">${v.toFixed(3)}</b></div>`; }).join("");
   c.el.innerHTML=h; }
 function renderGauge2(c){ const p=c.p, vals=c.last||[], subs=c.subv||[];   // two gauges side by side in one card
-  c.el.style.cssText="display:flex;gap:.3rem;align-items:flex-start;justify-content:center";
-  c.el.innerHTML=p.gauges.map((g,i)=>`<div class="gauge" style="flex:1;min-width:0"><div style="font-size:.62rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em">${g.label}</div><div class="g2s" data-i="${i}" style="width:100%"></div></div>`).join("");
+  c.el.style.cssText="display:flex;gap:.6rem;align-items:flex-start;justify-content:center";
+  c.el.innerHTML=p.gauges.map((g,i)=>`<div class="gauge" style="flex:0 1 150px;max-width:150px;min-width:0"><div style="font-size:.62rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em">${g.label}</div><div class="g2s" data-i="${i}" style="width:100%"></div></div>`).join("");
   p.gauges.forEach((g,i)=>{ const el=c.el.querySelector('.g2s[data-i="'+i+'"]'); const sub=g.sub?(g.sub.pre||"")+fmt(subs[i],g.sub.unit,g.sub.dec):null;
     gaugeSVG(el,vals[i],g.min,g.max,g.unit,g.dec,g.th,sub,null,null,null,null,null); }); }
 
