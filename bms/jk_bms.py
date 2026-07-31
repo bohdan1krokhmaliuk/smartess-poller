@@ -34,7 +34,8 @@ MQTT_PASS = ""
 TOPIC     = "smartess/"
 PERIOD    = 5                                    # seconds between publishes
 
-CMD_CELL_INFO = 0x96
+CMD_DEVICE_INFO = 0x97
+CMD_CELL_INFO   = 0x96
 
 
 def _cmd(reg):
@@ -164,9 +165,12 @@ async def run():
                 print("connected", MAC)
                 mc.publish(TOPIC + "bms_active", "on", retain=True)
                 await c.start_notify(CHAR, _on_notify)
-                # One request; the BMS then streams cell-info frames on its own.
-                # It beeps on every command, so we DON'T re-poll -- we only nudge
-                # it again if the stream goes quiet for a while.
+                # Handshake like the app: device-info request first, then cell-info.
+                # The BMS then streams cell-info frames on its own -- it beeps on
+                # every command, so we DON'T re-poll; we only nudge it again if the
+                # stream goes quiet for a while.
+                await c.write_gatt_char(CHAR, _cmd(CMD_DEVICE_INFO), response=False)
+                await asyncio.sleep(1.0)
                 await c.write_gatt_char(CHAR, _cmd(CMD_CELL_INFO), response=False)
                 last_rx[0] = time.time()
                 while enabled and c.is_connected:
