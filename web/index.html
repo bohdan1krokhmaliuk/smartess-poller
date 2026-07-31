@@ -181,7 +181,7 @@ const SECTIONS=[
    {t:"chart",title:"Load %",unit:"%",min:0,max:100,span:6,series:[{expr:M.loadpct,label:"load",color:"#f59e0b",fill:1}]},
  ]},
  {name:"📈 History & state", panels:[
-   {t:"chart",kind:"bars",title:"Energy per day (last 30 days, kWh)",unit:"kWh",span:12,series:[
+   {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
      {counter:"energymeter_pv_total",label:"generated",color:"#f59e0b"},
      {counter:"energymeter_consumed_total",label:"consumed",color:"#3b82f6"}]},
    {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
@@ -238,6 +238,8 @@ const state={ kind:"preset", dur:21600*1000, abs:null, autoMs:30000, timer:null 
 function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:to-state.dur,to}; } return state.abs; }
 function stepSec(){ const {from,to}=range(); return Math.max(10, Math.round((to-from)/1000/400)); }
 function windowSec(){ const {from,to}=range(); const evalT=Math.min(to,Date.now()); return {evalT, win:Math.max(60,Math.round((evalT-from)/1000))}; }
+const BUCKETS=[1,5,15,30,60,300,900,1800,3600,10800,21600,43200,86400]; // seconds, capped at 1 day
+function chooseBucket(spanSec){ const target=spanSec/60; for(const b of BUCKETS){ if(b>=target) return b; } return 86400; }
 
 function gaugeSVG(el,v,min,max,unit,dec,th,sub){ const cx=80,cy=76,r=60,a0=140,a1=400;
   const frac=(v==null)?0:Math.max(0,Math.min(1,(v-min)/(max-min))); const col=resolveColor(thColor(v,th)||"var(--accent)");
@@ -267,7 +269,7 @@ class Chart{
     this.ov.addEventListener("dblclick",()=>{ if(state.kind==="preset")setPreset(state.dur); else refresh(); });
   }
   mx(e){ return e.clientX-this.base.getBoundingClientRect().left; }
-  domain(){ if(this.p.kind==="bars"){ const d=new Date(); d.setHours(0,0,0,0); return {from:d.getTime()-29*864e5, to:Date.now()+864e5}; } return range(); }
+  domain(){ return range(); }
   geom(){ const w=this.base.clientWidth,h=this.base.clientHeight,hasR=this.series.some(s=>s.axis==="right"),tl=this.p.kind==="timeline"; return {w,h,pl:tl?8:46,pr:hasR?46:12,pt:8,pb:20,hasR}; }
   xToT(x){ const g=this.geom(),{from,to}=this.domain(); return from+(x-g.pl)/(g.w-g.pl-g.pr)*(to-from); }
   setData(series){ this.series=series; this.draw(); }
@@ -295,8 +297,8 @@ class Chart{
     niceTicks(S.lmin,S.lmax,4).forEach(v=>{const y=YL(v);x.beginPath();x.moveTo(g.pl,y);x.lineTo(w-g.pr,y);x.stroke();x.fillText(fmtAxis(v),g.pl-5,y);});
     if(g.hasR){x.textAlign="left";niceTicks(S.rmin,S.rmax,4).forEach(v=>x.fillText(fmtAxis(v),w-g.pr+5,YR(v)));}
     const base=YL(S.lmin<0?0:S.lmin);
-    if(this.p.kind==="bars"){ const n=this.series.length,dayMs=864e5,bw=Math.max(2,(X(from+dayMs)-X(from))*0.8/n);
-      this.series.forEach((s,si)=>{ x.fillStyle=resolveColor(s.color); s.pts.forEach(p=>{ const cx=X(p[0]+dayMs/2)+(si-(n-1)/2)*bw; x.fillRect(cx-bw/2, YL(p[1]), bw, base-YL(p[1])); }); }); this._X=X; this.drawOv(); return; }
+    if(this.p.kind==="bars"){ const n=this.series.length,bms=this.bucketMs||864e5,bw=Math.max(2,(X(from+bms)-X(from))*0.72/n);
+      this.series.forEach((s,si)=>{ x.fillStyle=resolveColor(s.color); s.pts.forEach(p=>{ const cx=X(p[0])+(si-(n-1)/2)*bw,y=YL(p[1]); x.fillRect(cx-bw/2, Math.min(y,base), bw, Math.abs(base-y)); }); }); this._X=X; this.drawOv(); return; }
     const gap=this.stepMs*2.5;
     this.series.forEach(s=>{ if(!s.pts.length)return; const Y=s.axis==="right"?YR:YL,col=resolveColor(s.color);
       segs(s.pts,gap).forEach(seg=>{ if(s.fill&&seg.length>1){ x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.lineTo(X(seg[seg.length-1][0]),base);x.lineTo(X(seg[0][0]),base);x.closePath();x.fillStyle=hexA(col,.16);x.fill(); }
@@ -342,8 +344,8 @@ function renderInfo(c){ const i=c.last||{}; c.el.innerHTML = (i.model||i.serial|
 async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
   await Promise.all(cards.map(async c=>{ const p=c.p;
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
-      if(p.kind==="bars"){ const dom=c.chart.domain();
-        const series=await Promise.all(p.series.map(async s=>({...s, pts:await qRange(`increase(${s.counter}[1d])`, dom.from, dom.to, 86400)}))); c.chart.setData(series); }
+      if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
+        const series=await Promise.all(p.series.map(async s=>({...s, pts:(await qRange(`increase(${s.counter}[${B}s])`, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}))); c.chart.setData(series); }
       else { const series=await Promise.all(p.series.map(async s=>({...s,pts:await qRange(s.expr,from,to,st)}))); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
