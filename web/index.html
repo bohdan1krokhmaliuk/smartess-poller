@@ -135,7 +135,7 @@ function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
   const tilt=(PVTILT==null?30:PVTILT), paz=(PVAZ==null?180:PVAZ);
   const cosAOI=Math.sin(el*r)*Math.cos(tilt*r)+Math.cos(el*r)*Math.sin(tilt*r)*Math.cos((az-paz)*r);
   const POA=DNI*Math.max(0,cosAOI)+0.1*DNI*(1+Math.cos(tilt*r))/2;
-  return Math.round(PVKWP*POA*0.85); }
+  return Math.round(PVKWP*POA*0.98); }   // 0.98 = system derate × clear-sky-model calibration (fit to this array's measured output)
 function pvPotentialW(){ return pvPotentialAt(new Date()); }
 
 // settings shared across clients via the poller's /settings (localStorage is the local cache)
