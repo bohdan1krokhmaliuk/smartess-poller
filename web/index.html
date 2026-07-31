@@ -280,7 +280,7 @@ const SECTIONS=[
 // Hover explanations (English) shown on each card title.
 const DESC={
  "Load":"Inverter output load as a % of its rated power. Sub-line is live output in watts.",
- "PV power":"Live solar power (PV voltage × current). The dial fills toward the clear-sky potential (if location+array are set), else your PV max, else the all-time peak; the sub-line shows that ceiling.",
+ "PV power":"Live solar power. Green arc = producing now, blue arc = clear-sky available now, and the dial max is your PV max (or the array nameplate from kWp). Sub-line shows the available power.",
  "Battery SoC":"Battery state of charge (%). Sub-line is the live battery voltage.",
  "Heatsink":"Inverter heatsink temperature. Green = normal, amber = warm, red = approaching over-temperature.",
  "Sources":"Live V, A and W for each source, plus energy used today. Grid current is inferred (W ÷ V).",
@@ -355,13 +355,14 @@ function windowSec(){ const {from,to}=range(); const evalT=Math.min(to,Date.now(
 const BUCKETS=[60,300,900,1800,3600,10800,21600,43200,86400,604800,2592000]; // 1m … 1 month
 function chooseBucket(spanSec){ const target=spanSec/60; for(const b of BUCKETS){ if(b>=target) return b; } return BUCKETS[BUCKETS.length-1]; }
 
-function gaugeSVG(el,v,min,max,unit,dec,th,sub,track){ const cx=80,cy=76,r=60,a0=140,a1=400;
-  const frac=(v==null)?0:Math.max(0,Math.min(1,(v-min)/(max-min))); const col=resolveColor(thColor(v,th)||"var(--accent)");
+function gaugeSVG(el,v,min,max,unit,dec,th,sub,track,mid,midCol){ const cx=80,cy=76,r=60,a0=140,a1=400;
+  const frac=(v==null)?0:Math.max(0,Math.min(1,(v-min)/(max-min))); const col=resolveColor(thColor(v,th)||"var(--accent)"); const mf=(mid==null)?null:Math.max(0,Math.min(1,(mid-min)/(max-min)));
   let val=v,u=unit||'',dc=dec; if(unit==='W'&&v!=null&&Math.abs(v)>=1000){ val=v/1000; u='kW'; dc=(dec==null?1:dec); }
   const valStr=(v==null)?'—':(dc!=null?val.toFixed(dc):(''+Math.round(val))); const fs=valStr.length>=6?22:valStr.length>=5?26:valStr.length>=4?30:36;
   const pt=a=>{const x=a*Math.PI/180;return [cx+r*Math.cos(x),cy+r*Math.sin(x)];};
   const arc=(f,t)=>{const [x0,y0]=pt(f),[x1,y1]=pt(t);return `M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 ${(t-f)>180?1:0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;};
   el.innerHTML=`<svg viewBox="0 0 160 122"><path d="${arc(a0,a1)}" fill="none" stroke="${track||cssVar('--grid')}" stroke-width="12" stroke-linecap="round"/>
+    ${mf!=null?`<path d="${arc(a0,a0+(a1-a0)*mf)}" fill="none" stroke="${midCol||'#3b82f6'}" stroke-width="12" stroke-linecap="round"/>`:''}
     <path d="${arc(a0,a0+(a1-a0)*frac)}" fill="none" stroke="${col}" stroke-width="12" stroke-linecap="round"/>
     <text x="80" y="72" text-anchor="middle" font-size="${fs}" font-weight="800" fill="${v==null?cssVar('--muted'):col}">${valStr}<tspan font-size="${Math.round(fs*0.45)}" dx="1" fill="${cssVar('--muted')}">${u}</tspan></text>
     ${sub?`<text x="80" y="97" text-anchor="middle" font-size="15" font-weight="600" fill="${cssVar('--muted')}">${sub}</text>`:''}</svg>`; }
@@ -456,12 +457,13 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
 function renderStat(c){ const p=c.p,v=c.last; if(v===undefined){ c.el.innerHTML='<span class="err">—</span>'; return; }
   if(p.map){ const m=p.map[Math.round(v)]; c.el.innerHTML=(v==null||!m)?"—":`<span style="color:${resolveColor(m[1])}">${m[0]}</span>`; return; }
   c.el.textContent=fmt(v,p.unit,p.dec); const col=thColor(v,p.th); c.el.style.color=col?resolveColor(col):"var(--text)"; }
-function renderGauge(c){ const p=c.p; let setMax=0,sub=null,track=null;
-  if(p.maxSetting==="pvmax"){ if(PVMAX>0){ setMax=PVMAX; sub="max "+fmt(PVMAX,"W"); }
-    else { const pot=pvPotentialW(); if(pot!=null&&pot>0){ setMax=pot; sub="apx avail "+fmt(pot,"W"); track=hexA("#3b82f6",.5); } } }
-  const mx=setMax>0?setMax:((c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max);
+function renderGauge(c){ const p=c.p; let mx=0,sub=null,mid=null;
+  if(p.maxSetting==="pvmax"){ const pot=pvPotentialW(), np=(PVKWP>0)?PVKWP*1000:0; mx=PVMAX>0?PVMAX:np;
+    if(pot!=null&&pot>0){ mid=pot; sub="apx avail "+fmt(pot,"W"); }
+    else if(PVMAX>0){ sub="max "+fmt(PVMAX,"W"); } }
+  if(!(mx>0)) mx=(c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max;
   if(sub==null&&p.sub) sub=(p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec);
-  gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th,sub,track); }
+  gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th,sub,null,mid,mid!=null?hexA("#3b82f6",.85):null); }
 function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>{
   let disp; if(it.map){ const m=it.map[Math.round(vals[i])]; disp=`<b style="color:${m?resolveColor(m[1]):'var(--muted)'};font-weight:700;font-size:1.05rem">${(vals[i]==null||!m)?'—':m[0]}</b>`; }
   else { const cl=it.th?resolveColor(thColor(vals[i],it.th)||it.color||'var(--text)'):resolveColor(it.color||'var(--text)'); disp=`<b style="color:${cl};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b>`; }
