@@ -357,7 +357,7 @@ function windowSec(){ const {from,to}=range(); const evalT=Math.min(to,Date.now(
 const BUCKETS=[60,300,900,1800,3600,10800,21600,43200,86400,604800,2592000]; // 1m … 1 month
 function chooseBucket(spanSec){ const target=spanSec/60; for(const b of BUCKETS){ if(b>=target) return b; } return BUCKETS[BUCKETS.length-1]; }
 
-function gaugeSVG(el,v,min,max,unit,dec,th,sub,track,mid,midCol){ const cx=80,cy=76,r=60,a0=140,a1=400;
+function gaugeSVG(el,v,min,max,unit,dec,th,sub,track,mid,midCol,sub2,tip){ const cx=80,cy=76,r=60,a0=140,a1=400;
   const frac=(v==null)?0:Math.max(0,Math.min(1,(v-min)/(max-min))); const col=resolveColor(thColor(v,th)||"var(--accent)"); const mf=(mid==null)?null:Math.max(0,Math.min(1,(mid-min)/(max-min)));
   let val=v,u=unit||'',dc=dec; if(unit==='W'&&v!=null&&Math.abs(v)>=1000){ val=v/1000; u='kW'; dc=(dec==null?1:dec); }
   const valStr=(v==null)?'—':(dc!=null?val.toFixed(dc):(''+Math.round(val))); const fs=valStr.length>=6?22:valStr.length>=5?26:valStr.length>=4?30:36;
@@ -367,7 +367,8 @@ function gaugeSVG(el,v,min,max,unit,dec,th,sub,track,mid,midCol){ const cx=80,cy
     ${mf!=null?`<path d="${arc(a0,a0+(a1-a0)*mf)}" fill="none" stroke="${midCol||'#3b82f6'}" stroke-width="12" stroke-linecap="round"/>`:''}
     <path d="${arc(a0,a0+(a1-a0)*frac)}" fill="none" stroke="${col}" stroke-width="12" stroke-linecap="round"/>
     <text x="80" y="72" text-anchor="middle" font-size="${fs}" font-weight="800" fill="${v==null?cssVar('--muted'):col}">${valStr}<tspan font-size="${Math.round(fs*0.45)}" dx="1" fill="${cssVar('--muted')}">${u}</tspan></text>
-    ${sub?`<text x="80" y="97" text-anchor="middle" font-size="15" font-weight="600" fill="${cssVar('--muted')}">${sub}</text>`:''}</svg>`; }
+    ${sub?`<text x="80" y="${sub2?92:97}" text-anchor="middle" font-size="14" font-weight="600" fill="${cssVar('--muted')}" style="cursor:${tip?'help':'default'}">${tip?`<title>${tip}</title>`:''}${sub}</text>`:''}
+    ${sub2?`<text x="80" y="108" text-anchor="middle" font-size="12" font-weight="600" fill="${cssVar('--muted')}">${sub2}</text>`:''}</svg>`; }
 
 function segs(pts,gap){ const out=[]; let cur=[]; for(let i=0;i<pts.length;i++){ if(i&&pts[i][0]-pts[i-1][0]>gap){ if(cur.length)out.push(cur); cur=[]; } cur.push(pts[i]); } if(cur.length)out.push(cur); return out; }
 function niceTicks(mn,mx,n){ if(mn===mx)return [mn]; const raw=(mx-mn)/n,mag=Math.pow(10,Math.floor(Math.log10(raw))),nm=raw/mag; const s=(nm>=5?5:nm>=2?2:1)*mag,out=[]; for(let v=Math.ceil(mn/s)*s;v<=mx+1e-9;v+=s)out.push(v); return out.length?out:[mn,mx]; }
@@ -459,13 +460,13 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
 function renderStat(c){ const p=c.p,v=c.last; if(v===undefined){ c.el.innerHTML='<span class="err">—</span>'; return; }
   if(p.map){ const m=p.map[Math.round(v)]; c.el.innerHTML=(v==null||!m)?"—":`<span style="color:${resolveColor(m[1])}">${m[0]}</span>`; return; }
   c.el.textContent=fmt(v,p.unit,p.dec); const col=thColor(v,p.th); c.el.style.color=col?resolveColor(col):"var(--text)"; }
-function renderGauge(c){ const p=c.p; let mx=0,sub=null,mid=null;
+function renderGauge(c){ const p=c.p; let mx=0,sub=null,mid=null,sub2=null,tip=null;
   if(p.maxSetting==="pvmax"){ const pot=pvPotentialW(), np=(PVKWP>0)?PVKWP*1000:0; mx=PVMAX>0?PVMAX:np;
-    if(pot!=null&&pot>0){ mid=pot; sub="apx avail "+fmt(pot,"W"); }
+    if(pot!=null&&pot>0){ mid=pot; sub="apx "+fmt(pot,"W"); tip="Approximate solar available now — weather-model irradiance for your array (includes cloud cover)"; sub2=mx>0?"max "+fmt(mx,"W"):null; }
     else if(PVMAX>0){ sub="max "+fmt(PVMAX,"W"); } }
   if(!(mx>0)) mx=(c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max;
   if(sub==null&&p.sub) sub=(p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec);
-  gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th,sub,null,mid,mid!=null?hexA("#3b82f6",.85):null); }
+  gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th,sub,null,mid,mid!=null?hexA("#3b82f6",.85):null,sub2,tip); }
 function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>{
   let disp; if(it.map){ const m=it.map[Math.round(vals[i])]; disp=`<b style="color:${m?resolveColor(m[1]):'var(--muted)'};font-weight:700;font-size:1.05rem">${(vals[i]==null||!m)?'—':m[0]}</b>`; }
   else { const cl=it.th?resolveColor(thColor(vals[i],it.th)||it.color||'var(--text)'):resolveColor(it.color||'var(--text)'); disp=`<b style="color:${cl};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b>`; }
@@ -556,14 +557,17 @@ function setBadge(m){ const b=document.getElementById("modeBadge"); b.className=
 document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",async()=>{ const m=btn.dataset.mode; if(!confirm("Switch to "+m.toUpperCase()+"?\nThe dongle reconnect can take up to ~2 min."))return; try{ const j=await (await fetch("/control/"+m)).json(); setBadge(j.mode); }catch(e){} }));
 
 function markPreset(el){ document.querySelectorAll("#presets button").forEach(b=>b.classList.toggle("on",b===el)); }
-function setPreset(dur){ state.kind="preset"; state.dur=dur; state.abs=null; markPreset([...document.querySelectorAll("#presets button")].find(b=>+b.dataset.dur*1000===dur)); refresh(); }
-function setToday(){ const d=new Date(); d.setHours(0,0,0,0); const from=d.getTime(); state.kind="abs"; state.abs={from,to:from+864e5}; markPreset(document.querySelector('#presets [data-today]')); refresh(); }
-function setAbs(from,to){ state.kind="abs"; state.abs={from,to}; markPreset(null); refresh(); }
+function setPreset(dur){ state.kind="preset"; state.dur=dur; state.abs=null; state.custom=false; markPreset([...document.querySelectorAll("#presets button")].find(b=>+b.dataset.dur*1000===dur)); updateCustomBtn(); refresh(); }
+function setToday(){ const d=new Date(); d.setHours(0,0,0,0); const from=d.getTime(); state.kind="abs"; state.abs={from,to:from+864e5}; state.custom=false; markPreset(document.querySelector('#presets [data-today]')); updateCustomBtn(); refresh(); }
+function setAbs(from,to){ state.kind="abs"; state.abs={from,to}; state.custom=true; markPreset(null); updateCustomBtn(); refresh(); }
+function isLive(){ return state.kind==="preset" || (state.abs && state.abs.to>=Date.now()); }   // presets always live; custom range live only while it includes now
+function tick(){ if(isLive()) refresh(); }   // auto-refresh skips static (past) custom ranges
+function updateCustomBtn(){ const b=document.getElementById("customBtn"); b.textContent=state.custom?"↺":"📅"; b.title=state.custom?"Back to live (6h)":"Custom range"; }
 document.querySelectorAll("#presets button").forEach(b=>b.addEventListener("click",()=>{ b.dataset.today?setToday():setPreset(+b.dataset.dur*1000); }));
 document.getElementById("refreshNow").addEventListener("click",refresh);
-document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(refresh,state.autoMs); }));
+document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
 const pop=document.getElementById("popover"),cbtn=document.getElementById("customBtn"); const toInput=ms=>new Date(ms-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
-cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); } pop.classList.toggle("open",open); cbtn.classList.toggle("on",open); });
+cbtn.addEventListener("click",()=>{ if(state.custom){ setPreset(21600000); return; } const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); } pop.classList.toggle("open",open); cbtn.classList.toggle("on",open); });
 document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); cbtn.classList.remove("on"); setAbs(f,t); } });
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
@@ -597,7 +601,7 @@ addEventListener("scroll",hideTip,true);
 
 let rz; new ResizeObserver(()=>{clearTimeout(rz);rz=setTimeout(()=>cards.forEach(c=>c.chart&&c.chart.draw()),120);}).observe(main);
 setInterval(fetchWeather, 900000);
-state.timer=setInterval(refresh,state.autoMs);
+state.timer=setInterval(tick,state.autoMs);
 loadServerSettings().then(()=>{ fetchWeather(); refresh(); });
 </script>
 </body>
