@@ -108,7 +108,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 <script>
 "use strict";
 const VM="/vm/api/v1";
-let TARIFF=parseFloat(localStorage.getItem("tariff")||"0")||0;
+let TARIFF=parseFloat(localStorage.getItem("tariff")||"4.32")||0;  // UA regulated household tariff (₴/kWh, fixed until Oct 2026); no public API — edit in ⚙
 let CUR=localStorage.getItem("currency")||"₴";
 let PVMAX=parseFloat(localStorage.getItem("pvmax")||"0")||0;
 
@@ -253,11 +253,13 @@ function chooseBucket(spanSec){ const target=spanSec/60; for(const b of BUCKETS)
 
 function gaugeSVG(el,v,min,max,unit,dec,th,sub){ const cx=80,cy=76,r=60,a0=140,a1=400;
   const frac=(v==null)?0:Math.max(0,Math.min(1,(v-min)/(max-min))); const col=resolveColor(thColor(v,th)||"var(--accent)");
+  let val=v,u=unit||'',dc=dec; if(unit==='W'&&v!=null&&Math.abs(v)>=1000){ val=v/1000; u='kW'; dc=(dec==null?1:dec); }
+  const valStr=(v==null)?'—':(dc!=null?val.toFixed(dc):(''+Math.round(val))); const fs=valStr.length>=6?22:valStr.length>=5?26:valStr.length>=4?30:36;
   const pt=a=>{const x=a*Math.PI/180;return [cx+r*Math.cos(x),cy+r*Math.sin(x)];};
   const arc=(f,t)=>{const [x0,y0]=pt(f),[x1,y1]=pt(t);return `M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 ${(t-f)>180?1:0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;};
   el.innerHTML=`<svg viewBox="0 0 160 122"><path d="${arc(a0,a1)}" fill="none" stroke="${cssVar('--grid')}" stroke-width="12" stroke-linecap="round"/>
     <path d="${arc(a0,a0+(a1-a0)*frac)}" fill="none" stroke="${col}" stroke-width="12" stroke-linecap="round"/>
-    <text x="80" y="72" text-anchor="middle" font-size="36" font-weight="800" fill="${v==null?cssVar('--muted'):col}">${v==null?'—':(dec!=null?v.toFixed(dec):Math.round(v))}<tspan font-size="16" dx="1" fill="${cssVar('--muted')}">${unit||''}</tspan></text>
+    <text x="80" y="72" text-anchor="middle" font-size="${fs}" font-weight="800" fill="${v==null?cssVar('--muted'):col}">${valStr}<tspan font-size="${Math.round(fs*0.45)}" dx="1" fill="${cssVar('--muted')}">${u}</tspan></text>
     ${sub?`<text x="80" y="97" text-anchor="middle" font-size="15" font-weight="600" fill="${cssVar('--muted')}">${sub}</text>`:''}</svg>`; }
 
 function segs(pts,gap){ const out=[]; let cur=[]; for(let i=0;i<pts.length;i++){ if(i&&pts[i][0]-pts[i-1][0]>gap){ if(cur.length)out.push(cur); cur=[]; } cur.push(pts[i]); } if(cur.length)out.push(cur); return out; }
