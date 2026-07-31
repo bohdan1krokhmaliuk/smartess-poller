@@ -54,6 +54,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .grid.hidden{display:none}
 .card{grid-column:span 3; background:var(--panel); border:1px solid var(--border); border-radius:.8rem; box-shadow:var(--shadow); padding:.7rem .8rem; min-width:0; position:relative}
 .card h3{margin:0 0 .3rem; font-size:.78rem; font-weight:600; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.card h3[title]{text-decoration:underline dotted; text-decoration-color:var(--border); text-underline-offset:2px; cursor:help}
 .card .val{font-size:clamp(1.3rem,2.4vw,1.9rem); font-weight:700; line-height:1.1; color:var(--text)}
 .card.chart{grid-column:span 6}
 .card.info{grid-column:span 12}
@@ -220,6 +221,45 @@ const SECTIONS=[
  {name:"🔌 Device", panels:[{t:"info",title:"Inverter",span:12}]},
 ];
 
+// Hover explanations (English) shown on each card title.
+const DESC={
+ "Load":"Inverter output load as a % of its rated power. Sub-line is live output in watts.",
+ "PV power":"Live solar power (PV voltage × current). The dial fills toward the all-time peak, or your PV max from settings.",
+ "Battery SoC":"Battery state of charge (%). Sub-line is the live battery voltage.",
+ "Heatsink":"Inverter heatsink temperature. Green = normal, amber = warm, red = approaching over-temperature.",
+ "Sources":"Live V, A and W for each source; the energy column is over the selected time range. Grid current is inferred (W ÷ V).",
+ "Mode":"Inverter working mode — Line (from grid), Battery (off-grid), Bypass, etc.",
+ "Status":"OK, or FAULT when any inverter warning/fault bit is active.",
+ "Generated":"Solar energy produced over the selected time range.",
+ "Consumed":"Energy used by your loads over the selected time range.",
+ "From battery":"Energy discharged from the battery over the selected range.",
+ "From grid":"Energy imported from the grid over the selected range.",
+ "Self-sufficiency":"Share of consumption covered by solar over the selected range (PV ÷ consumed).",
+ "PV total (life)":"Lifetime solar generation counter reported by the inverter itself (QET).",
+ "Cost":"Estimated cost for the selected range: Total = all consumption × tariff, Grid = grid energy × tariff, Solar saved = value of the solar-covered part.",
+ "Sources & load (W)":"Instantaneous power from solar, battery and grid, plus total load, over time.",
+ "Self-sufficiency %":"Share of the load covered by solar at each moment.",
+ "Output power":"Inverter output: active power (W, real work) vs apparent power (VA).",
+ "Load %":"Inverter output load as a % of rated power, over time.",
+ "Energy over time (kWh)":"Energy per auto-sized time bucket — generated and consumed within each bucket.",
+ "Mode timeline":"Working mode over time as coloured bands (Line, Battery, Bypass…).",
+ "Charging now":"Live charging: current, power, the voltage it charges at, the source (solar/grid) and the bulk/float target voltages.",
+ "SoC & voltage":"Battery charge (%) and terminal voltage over time.",
+ "Charge / discharge current":"Battery charge and discharge current over time.",
+ "Net battery power (+charge / −discharge)":"Net battery power — positive while charging, negative while discharging.",
+ "PV voltage / current / power":"Solar array voltage, current and power (V×I) over time.",
+ "PV peak":"Highest solar power seen over the selected range.",
+ "Voltages (grid / output / bus)":"Grid input, inverter AC output and internal DC bus voltages over time.",
+ "Frequencies":"Grid and inverter output frequency (Hz).",
+ "Grid uptime":"Share of the selected range the grid was present (voltage above 50 V).",
+ "Power factor now":"Active ÷ apparent power. 1.0 = purely resistive load; lower means a more reactive load.",
+ "Power factor":"Power factor over time (active ÷ apparent power).",
+ "Heatsink temperature":"Heatsink temperature over time. Green normal → amber → red (approaching over-temperature — not a shutdown yet).",
+ "Average load (1h / 24h)":"Average inverter output power over the last 1 hour and 24 hours.",
+ "Min SoC":"Lowest battery charge reached over the selected range.",
+ "Inverter":"Inverter identity — model, serial number, protocol and firmware.",
+};
+
 const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const resolveColor=c=>(c&&c.startsWith("var("))?cssVar(c.slice(4,-1)):c;
 function fmt(v,unit,dec){
@@ -337,7 +377,7 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
   head.addEventListener("click",()=>{ const on=grid.classList.toggle("hidden"); head.classList.toggle("collapsed",on); if(on)collapsed.add(sec.name);else collapsed.delete(sec.name); localStorage.setItem("collapsed",JSON.stringify([...collapsed])); if(!on)cards.forEach(c=>c.chart&&c.chart.draw()); });
   if(collapsed.has(sec.name)){ grid.classList.add("hidden"); head.classList.add("collapsed"); }
   for(const p of sec.panels){ const card=document.createElement("div");card.className="card"+(p.t==="chart"?" chart":"")+(p.t==="info"?" info":"");card.style.gridColumn="span "+(p.span||3);
-    const title=document.createElement("h3");title.textContent=p.title;card.append(title);
+    const title=document.createElement("h3");title.textContent=p.title; const dsc=p.desc||DESC[p.title]; if(dsc)title.title=dsc; card.append(title);
     if(p.t==="chart"){ const body=document.createElement("div");body.className="chartwrap"+(p.kind==="timeline"?" tl":"");card.append(body);
       const leg=document.createElement("div");leg.className="legend";card.append(leg);
       const legItems=(p.kind==="timeline"?Object.values(p.map).map(m=>({label:m[0],color:m[1]})):p.series).map(s=>{const sp=document.createElement("span");const ic=document.createElement("i");ic.style.background=resolveColor(s.color);sp.append(ic,document.createTextNode(s.label));leg.append(sp);return {ic,color:s.color};});
