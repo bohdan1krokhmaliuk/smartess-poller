@@ -99,7 +99,8 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
   <button class="iconbtn" id="refreshNow" title="Refresh now">⟳</button>
   <span class="rel"><button class="iconbtn" id="cfgBtn" title="Settings">⚙</button>
     <div class="popover" id="cfgPop"><label>Tariff (per kWh)</label><input type="number" step="0.01" id="tariff">
-      <label>Currency</label><input type="text" id="currency" maxlength="4"><button class="apply" id="cfgApply">Save</button></div></span>
+      <label>Currency</label><input type="text" id="currency" maxlength="4">
+      <label>PV max (W, 0 = auto)</label><input type="number" step="50" id="pvmax"><button class="apply" id="cfgApply">Save</button></div></span>
   <button class="iconbtn" id="themeBtn" title="Toggle theme">🌙</button>
 </header>
 <main id="main"></main>
@@ -109,6 +110,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 const VM="/vm/api/v1";
 let TARIFF=parseFloat(localStorage.getItem("tariff")||"0")||0;
 let CUR=localStorage.getItem("currency")||"₴";
+let PVMAX=parseFloat(localStorage.getItem("pvmax")||"0")||0;
 
 const M={
   soc:"inverter_battery_capacity", loadpct:"inverter_output_load_percent",
@@ -145,9 +147,9 @@ const CHG_SRC={0:["Idle","var(--muted)"],1:["☀ Solar","var(--good)"],2:["⚡ G
 const SECTIONS=[
  {name:"🔌 Device", panels:[{t:"info",title:"Inverter",span:12}]},
  {name:"⚡ Now", panels:[
-   {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[20,"var(--warn)"],[50,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
+   {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
-   {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",span:3,th:[[0,"#f59e0b"]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"пік "}},
+   {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",maxSetting:"pvmax",span:3,th:[[0,"#f59e0b"],[75,"var(--good)"]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"пік "}},
    {t:"stat",title:"Heatsink",expr:M.temp,live:1,unit:"°C",span:3,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
    {t:"table",title:"Sources",span:6,note:"Grid current is inferred (W ÷ V) — the inverter does not report it directly.",cols:["","V","A","W","today"],rows:[
      {label:"PV",color:"#f59e0b",cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{expr:"energymeter_pv_today",unit:"eauto"}]},
@@ -255,7 +257,7 @@ function gaugeSVG(el,v,min,max,unit,dec,th,sub){ const cx=80,cy=76,r=60,a0=140,a
   const arc=(f,t)=>{const [x0,y0]=pt(f),[x1,y1]=pt(t);return `M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 ${(t-f)>180?1:0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;};
   el.innerHTML=`<svg viewBox="0 0 160 122"><path d="${arc(a0,a1)}" fill="none" stroke="${cssVar('--grid')}" stroke-width="12" stroke-linecap="round"/>
     <path d="${arc(a0,a0+(a1-a0)*frac)}" fill="none" stroke="${col}" stroke-width="12" stroke-linecap="round"/>
-    <text x="80" y="72" text-anchor="middle" font-size="36" font-weight="800" fill="${cssVar('--text')}">${v==null?'—':(dec!=null?v.toFixed(dec):Math.round(v))}<tspan font-size="16" dx="1" fill="${cssVar('--muted')}">${unit||''}</tspan></text>
+    <text x="80" y="72" text-anchor="middle" font-size="36" font-weight="800" fill="${v==null?cssVar('--muted'):col}">${v==null?'—':(dec!=null?v.toFixed(dec):Math.round(v))}<tspan font-size="16" dx="1" fill="${cssVar('--muted')}">${unit||''}</tspan></text>
     ${sub?`<text x="80" y="97" text-anchor="middle" font-size="15" font-weight="600" fill="${cssVar('--muted')}">${sub}</text>`:''}</svg>`; }
 
 function segs(pts,gap){ const out=[]; let cur=[]; for(let i=0;i<pts.length;i++){ if(i&&pts[i][0]-pts[i-1][0]>gap){ if(cur.length)out.push(cur); cur=[]; } cur.push(pts[i]); } if(cur.length)out.push(cur); return out; }
@@ -344,8 +346,12 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
 function renderStat(c){ const p=c.p,v=c.last; if(v===undefined){ c.el.innerHTML='<span class="err">—</span>'; return; }
   if(p.map){ const m=p.map[Math.round(v)]; c.el.innerHTML=(v==null||!m)?"—":`<span style="color:${resolveColor(m[1])}">${m[0]}</span>`; return; }
   c.el.textContent=fmt(v,p.unit,p.dec); const col=thColor(v,p.th); c.el.style.color=col?resolveColor(col):"var(--text)"; }
-function renderGauge(c){ const p=c.p; const mx=(c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max;
-  gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th, p.sub?((p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec)):null); }
+function renderGauge(c){ const p=c.p; const setMax=(p.maxSetting==="pvmax"&&PVMAX>0)?PVMAX:0;
+  const mx=setMax>0?setMax:((c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max);
+  let sub=null;
+  if(setMax>0&&p.maxSetting==="pvmax") sub="макс "+fmt(setMax,"W");
+  else if(p.sub) sub=(p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec);
+  gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th,sub); }
 function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>{
   let disp; if(it.map){ const m=it.map[Math.round(vals[i])]; disp=`<b style="color:${m?resolveColor(m[1]):'var(--muted)'};font-weight:700;font-size:1.05rem">${(vals[i]==null||!m)?'—':m[0]}</b>`; }
   else disp=`<b style="color:${resolveColor(it.color||'var(--text)')};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b>`;
@@ -394,8 +400,8 @@ cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); 
 document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); cbtn.classList.remove("on"); setAbs(f,t); } });
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
-cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ document.getElementById("tariff").value=TARIFF||""; document.getElementById("currency").value=CUR; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
-document.getElementById("cfgApply").addEventListener("click",()=>{ TARIFF=parseFloat(document.getElementById("tariff").value)||0; CUR=document.getElementById("currency").value||"₴"; localStorage.setItem("tariff",TARIFF); localStorage.setItem("currency",CUR); cfgPop.classList.remove("open"); cfgBtn.classList.remove("on"); refresh(); });
+cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ document.getElementById("tariff").value=TARIFF||""; document.getElementById("currency").value=CUR; document.getElementById("pvmax").value=PVMAX||""; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
+document.getElementById("cfgApply").addEventListener("click",()=>{ TARIFF=parseFloat(document.getElementById("tariff").value)||0; CUR=document.getElementById("currency").value||"₴"; PVMAX=parseFloat(document.getElementById("pvmax").value)||0; localStorage.setItem("tariff",TARIFF); localStorage.setItem("currency",CUR); localStorage.setItem("pvmax",PVMAX); cfgPop.classList.remove("open"); cfgBtn.classList.remove("on"); refresh(); });
 document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classList.remove("open");cbtn.classList.remove("on"); cfgPop.classList.remove("open");cfgBtn.classList.remove("on"); } });
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
