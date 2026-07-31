@@ -106,6 +106,8 @@ QVFW3 = bytes.fromhex("ff045156465733d3d40d")   # secondary firmware (static)
 
 # device identity, filled as the static commands come in; served at /info
 INFO = {}
+# rated charge targets from QPIRI, surfaced as metrics for the dashboard
+RATED = {}
 
 # QPIGS fields, in order, per the Voltronic PI30 spec.
 QPIGS_FIELDS = [
@@ -273,6 +275,7 @@ class EnergyMeter:
         self.day = None
         self.total = {k: 0.0 for k in self.KEYS}
         self.today = {k: 0.0 for k in self.KEYS}
+        self.peak = {}                 # all-time high-water marks (e.g. peak PV power)
         self._last_save = 0.0
         try:
             with open(self.path) as f:
@@ -280,6 +283,7 @@ class EnergyMeter:
             self.day = d.get("day")
             self.total.update(d.get("total", {}))
             self.today.update(d.get("today", {}))
+            self.peak.update(d.get("peak", {}))
         except Exception:
             pass
 
@@ -287,7 +291,8 @@ class EnergyMeter:
         try:
             tmp = self.path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump({"day": self.day, "total": self.total, "today": self.today}, f)
+                json.dump({"day": self.day, "total": self.total,
+                           "today": self.today, "peak": self.peak}, f)
             os.replace(tmp, self.path)
         except Exception:
             pass
@@ -308,6 +313,15 @@ class EnergyMeter:
         if now - self._last_save > 60:             # throttle SD writes to ~1/min
             self._save()
             self._last_save = now
+
+    def bump(self, key, val):
+        """Track an all-time high-water mark for a metric (e.g. peak PV power)."""
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return
+        if v > self.peak.get(key, 0.0):
+            self.peak[key] = v
 
     def stats_kwh(self):
         out = {}
@@ -349,9 +363,16 @@ def publish_qpigs(mc, topic, text):
         p_bout = bv * float(data.get("battery_discharge_current", 0) or 0)
         p_bin = bv * float(data.get("battery_charge_current", 0) or 0)
         p_grid = max(p_load + p_bin - p_pv - p_bout, 0.0)
+        _meter.bump("pv_power", p_pv)
         _meter.update({"consumed": p_load, "pv": p_pv, "battery_out": p_bout,
                        "battery_in": p_bin, "grid": p_grid}, time.time())
-        mc.publish(topic + "energy_stats", json.dumps(_meter.stats_kwh()), retain=True)
+        stats = _meter.stats_kwh()
+        stats["pv_peak_power"] = round(_meter.peak.get("pv_power", 0.0))
+        for k, v in RATED.items():
+            stats["rated_" + k] = v
+        stats["charge_from_solar"] = 1 if (len(status) > 6 and status[6] == "1") else 0
+        stats["charge_from_grid"] = 1 if (len(status) > 7 and status[7] == "1") else 0
+        mc.publish(topic + "energy_stats", json.dumps(stats), retain=True)
     except Exception:
         pass
 
@@ -369,15 +390,22 @@ def publish_qpigs(mc, topic, text):
 def publish_qpiri(mc, topic, text):
     """Parse QPIRI rated info and publish per-field topics (+ enum names)."""
     tokens = text.split()
+    vals = {}
     for name, val in zip(QPIRI_FIELDS, tokens):
         try:
             out = float(val) if "." in val else int(val)
         except ValueError:
             out = val
+        vals[name] = out
         mc.publish(topic + "rated/" + name, out, retain=True)
         if name in QPIRI_ENUMS:
             mc.publish(topic + "rated/" + name + "_name",
                        QPIRI_ENUMS[name].get(val, val), retain=True)
+    for src, dst in (("battery_bulk_voltage", "bulk_v"),
+                     ("battery_float_voltage", "float_v"),
+                     ("max_charging_current", "max_charge_a")):
+        if isinstance(vals.get(src), (int, float)):
+            RATED[dst] = vals[src]
     mc.publish(topic + "rated_info", text, retain=True)
 
 

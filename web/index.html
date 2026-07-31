@@ -140,21 +140,20 @@ dv.savings=w=>`clamp_min((${dv.cons(w)})-(${dv.grid(w)}),0)*${TARIFF}`;
 dv.total=w=>`(${dv.cons(w)})*${TARIFF}`;
 const MODE_MAP={0:["PowerOn","var(--accent)"],1:["Standby","var(--warn)"],2:["Line","var(--good)"],3:["Battery","var(--accent)"],4:["Fault","var(--bad)"],5:["PowerSaving","var(--warn)"],6:["Shutdown","var(--muted)"],7:["Bypass","var(--warn)"]};
 const FAULT_MAP={0:["OK","var(--good)"],1:["FAULT","var(--bad)"]};
+const CHG_SRC={0:["Idle","var(--muted)"],1:["☀ Solar","var(--good)"],2:["⚡ Grid","var(--accent)"],3:["Solar + Grid","var(--good)"]};
 
 const SECTIONS=[
  {name:"🔌 Device", panels:[{t:"info",title:"Inverter",span:12}]},
  {name:"⚡ Now", panels:[
    {t:"gauge",title:"Battery SoC",expr:M.soc,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--bad)"],[20,"var(--warn)"],[50,"var(--good)"]],sub:{expr:M.batV,live:1,unit:"V",dec:2}},
    {t:"gauge",title:"Load",expr:M.loadpct,live:1,unit:"%",min:0,max:100,span:3,th:[[0,"var(--good)"],[70,"var(--warn)"],[90,"var(--bad)"]],sub:{expr:M.load,live:1,unit:"W"}},
-   {t:"multi",title:"Voltages",span:3,items:[
-     {label:"Grid",expr:M.gridV,live:1,unit:"V",dec:1,color:"var(--accent)"},
-     {label:"PV",expr:M.pvV,live:1,unit:"V",dec:1,color:"var(--warn)"},
-     {label:"Battery",expr:M.batV,live:1,unit:"V",dec:2,color:"var(--good)"}]},
-   {t:"multi",title:"Load",span:3,items:[
-     {label:"Now",expr:M.load,live:1,unit:"W",color:"var(--text)"},
-     {label:"Peak",dyn:dv.peakLoad,unit:"W",color:"var(--muted)"}]},
-   {t:"stat",title:"PV power",expr:M.pvpow,live:1,unit:"W",span:3},
+   {t:"gauge",title:"PV power",expr:M.pvpow,live:1,unit:"W",min:0,max:1000,maxExpr:"energymeter_pv_peak_power",span:3,th:[[0,"#f59e0b"]],sub:{expr:"energymeter_pv_peak_power",live:1,unit:"W",pre:"пік "}},
    {t:"stat",title:"Heatsink",expr:M.temp,live:1,unit:"°C",span:3,th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]},
+   {t:"table",title:"Sources",span:6,cols:["","V","A","W","today"],rows:[
+     {label:"PV",color:"#f59e0b",cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{expr:"energymeter_pv_today",unit:"eauto"}]},
+     {label:"Battery",color:"#22c55e",cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{expr:"energymeter_battery_out_today",unit:"eauto"}]},
+     {label:"Grid",color:"#3b82f6",cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{expr:"energymeter_grid_today",unit:"eauto"}]},
+     {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{expr:"energymeter_consumed_today",unit:"eauto"}]}]},
    {t:"stat",title:"Mode",expr:M.mode,live:1,map:MODE_MAP,span:3},
    {t:"stat",title:"Status",expr:M.fault,live:1,map:FAULT_MAP,span:3},
  ]},
@@ -187,9 +186,17 @@ const SECTIONS=[
    {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
  ]},
  {name:"🔋 Battery", panels:[
+   {t:"multi",title:"Charging now",span:6,items:[
+     {label:"Current",expr:M.chg,live:1,unit:"A",dec:1,color:"var(--good)"},
+     {label:"Power",expr:"inverter_battery_voltage*inverter_battery_charge_current",live:1,unit:"W",color:"var(--good)"},
+     {label:"At voltage",expr:M.batV,live:1,unit:"V",dec:2,color:"var(--text)"},
+     {label:"Source",expr:"energymeter_charge_from_solar + 2*energymeter_charge_from_grid",live:1,map:CHG_SRC},
+     {label:"Target bulk",expr:"energymeter_rated_bulk_v",live:1,unit:"V",dec:1,color:"var(--muted)"},
+     {label:"Target float",expr:"energymeter_rated_float_v",live:1,unit:"V",dec:1,color:"var(--muted)"},
+     {label:"Max current",expr:"energymeter_rated_max_charge_a",live:1,unit:"A",dec:0,color:"var(--muted)"}]},
    {t:"chart",title:"SoC & voltage",span:6,series:[{expr:M.batV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.soc,label:"SoC",color:"#22c55e",unit:"%",axis:"right",min:0,max:100}]},
    {t:"chart",title:"Charge / discharge current",unit:"A",span:6,series:[{expr:M.chg,label:"charge",color:"#22c55e"},{expr:M.dis,label:"discharge",color:"#ef4444"}]},
-   {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:12,series:[{expr:M.netbat,label:"net",color:"#06b6d4",fill:1}]},
+   {t:"chart",title:"Net battery power (+charge / −discharge)",unit:"W",span:6,series:[{expr:M.netbat,label:"net",color:"#06b6d4",fill:1}]},
  ]},
  {name:"☀️ Solar", panels:[
    {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#22c55e",unit:"A"},{expr:M.pvpow,label:"power",color:"#f59e0b",unit:"W",axis:"right"}]},
@@ -219,6 +226,7 @@ function fmt(v,unit,dec){
   if(u==="W"&&Math.abs(v)>=1000)return (v/1000).toFixed(dec??2)+" kW";
   if(u==="W")return Math.round(v)+" W";
   if(u==="kWh")return v.toFixed(dec??2)+" kWh";
+  if(u==="eauto")return Math.abs(v)<1?(v*1000).toFixed(0)+" Wh":v.toFixed(2)+" kWh";
   if(u==="%")return v.toFixed(dec??0)+" %"; if(u==="°C")return v.toFixed(dec??0)+" °C";
   if(u==="V")return v.toFixed(dec??1)+" V"; if(u==="A")return v.toFixed(dec??1)+" A"; if(u==="Hz")return v.toFixed(dec??2)+" Hz";
   return dec!=null?v.toFixed(dec):(""+Math.round(v*100)/100);
@@ -328,7 +336,7 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
       const leg=document.createElement("div");leg.className="legend";card.append(leg);
       const legItems=(p.kind==="timeline"?Object.values(p.map).map(m=>({label:m[0],color:m[1]})):p.series).map(s=>{const sp=document.createElement("span");const ic=document.createElement("i");ic.style.background=resolveColor(s.color);sp.append(ic,document.createTextNode(s.label));leg.append(sp);return {ic,color:s.color};});
       cards.push({p,card,chart:new Chart(body,p),legItems});
-    } else { const body=document.createElement("div");body.className=p.t==="gauge"?"gauge":"val";if(p.t!=="gauge")body.textContent="—";card.append(body);cards.push({p,card,el:body,last:null}); }
+    } else { const body=document.createElement("div");body.className=p.t==="gauge"?"gauge":(p.t==="table"?"tbl":"val");if(p.t!=="gauge"&&p.t!=="table")body.textContent="—";card.append(body);cards.push({p,card,el:body,last:null}); }
     grid.append(card);
   }
 }
@@ -336,8 +344,20 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
 function renderStat(c){ const p=c.p,v=c.last; if(v===undefined){ c.el.innerHTML='<span class="err">—</span>'; return; }
   if(p.map){ const m=p.map[Math.round(v)]; c.el.innerHTML=(v==null||!m)?"—":`<span style="color:${resolveColor(m[1])}">${m[0]}</span>`; return; }
   c.el.textContent=fmt(v,p.unit,p.dec); const col=thColor(v,p.th); c.el.style.color=col?resolveColor(col):"var(--text)"; }
-function renderGauge(c){ const p=c.p; gaugeSVG(c.el,c.last,p.min,p.max,p.unit,p.dec,p.th, p.sub?fmt(c.subv,p.sub.unit,p.sub.dec):null); }
-function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>`<div style="display:flex;justify-content:space-between;align-items:baseline;line-height:1.5"><span style="color:var(--muted);font-weight:600;font-size:.82rem">${it.label}</span><b style="color:${resolveColor(it.color||'var(--text)')};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b></div>`).join(""); }
+function renderGauge(c){ const p=c.p; const mx=(c.maxv!=null&&isFinite(c.maxv)&&c.maxv>0)?c.maxv:p.max;
+  gaugeSVG(c.el,c.last,p.min,mx,p.unit,p.dec,p.th, p.sub?((p.sub.pre||"")+fmt(c.subv,p.sub.unit,p.sub.dec)):null); }
+function renderMulti(c){ const p=c.p,vals=c.last||[]; c.el.innerHTML=p.items.map((it,i)=>{
+  let disp; if(it.map){ const m=it.map[Math.round(vals[i])]; disp=`<b style="color:${m?resolveColor(m[1]):'var(--muted)'};font-weight:700;font-size:1.05rem">${(vals[i]==null||!m)?'—':m[0]}</b>`; }
+  else disp=`<b style="color:${resolveColor(it.color||'var(--text)')};font-weight:700;font-size:1.1rem">${fmt(vals[i],it.unit,it.dec)}</b>`;
+  return `<div style="display:flex;justify-content:space-between;align-items:baseline;line-height:1.5"><span style="color:var(--muted);font-weight:600;font-size:.82rem">${it.label}</span>${disp}</div>`;}).join(""); }
+function renderTable(c){ const p=c.p, rows=c.last||[];
+  let h='<div style="overflow-x:auto"><table style="width:100%;min-width:300px;border-collapse:collapse;font-size:.86rem"><thead><tr>'+
+    p.cols.map((cl,i)=>`<th style="text-align:${i?'right':'left'};color:var(--muted);font-weight:600;padding:2px 5px;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em">${cl}</th>`).join('')+'</tr></thead><tbody>';
+  p.rows.forEach((r,ri)=>{ const vals=rows[ri]||[];
+    h+=`<tr><td style="text-align:left;padding:5px;border-top:1px solid var(--grid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${resolveColor(r.color)};margin-right:7px;vertical-align:middle"></span><b style="font-weight:600">${r.label}</b></td>`;
+    r.cells.forEach((cell,ci)=>{ h+=`<td style="text-align:right;padding:5px;border-top:1px solid var(--grid);font-variant-numeric:tabular-nums;font-weight:600">${fmt(vals[ci],cell.unit,cell.dec)}</td>`; });
+    h+='</tr>'; });
+  c.el.innerHTML=h+'</tbody></table></div>'; }
 function renderInfo(c){ const i=c.last||{}; c.el.innerHTML = (i.model||i.serial||i.firmware) ?
   `<b>Model</b> ${i.model||"—"} &nbsp;·&nbsp; <b>Serial</b> ${i.serial||"—"} &nbsp;·&nbsp; <b>Protocol</b> ${i.protocol||"—"} &nbsp;·&nbsp; <b>FW</b> ${i.firmware||"—"}` : "—"; }
 
@@ -349,7 +369,8 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
       else { const series=await Promise.all(p.series.map(async s=>({...s,pts:await qRange(s.expr,from,to,st)}))); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=>qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
-    else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); renderGauge(c); }
+    else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.expr,now))))); renderTable(c); }
+    else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
@@ -378,7 +399,7 @@ document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classL
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
 function applyTheme(t){ if(t)document.documentElement.setAttribute("data-theme",t); else document.documentElement.removeAttribute("data-theme"); document.getElementById("themeBtn").textContent=curTheme()==="dark"?"☀️":"🌙";
-  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="info") renderInfo(c); else if(c.p.t==="multi") renderMulti(c); else renderStat(c); }); }
+  cards.forEach(c=>{ if(c.chart){ c.chart.draw(); c.legItems.forEach(l=>l.ic.style.background=resolveColor(l.color)); } else if(c.p.t==="gauge") renderGauge(c); else if(c.p.t==="info") renderInfo(c); else if(c.p.t==="multi") renderMulti(c); else if(c.p.t==="table") renderTable(c); else renderStat(c); }); }
 document.getElementById("themeBtn").addEventListener("click",()=>{ const t=curTheme()==="dark"?"light":"dark"; localStorage.setItem("theme",t); applyTheme(t); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if(!localStorage.getItem("theme"))applyTheme(null); });
 applyTheme(localStorage.getItem("theme")||null);
