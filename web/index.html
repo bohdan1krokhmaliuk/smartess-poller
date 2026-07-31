@@ -318,6 +318,8 @@ const DESC={
 const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const resolveColor=c=>(c&&c.startsWith("var("))?cssVar(c.slice(4,-1)):c;
 function fmtDur(ms){ const s=(ms||0)/1000; if(s<90)return Math.round(s)+" s"; if(s<5400)return Math.round(s/60)+" min"; if(s<86400)return (s/3600).toFixed((s/3600)%1?1:0)+" h"; if(s<604800)return Math.round(s/86400)+" d"; if(s<2592000)return Math.round(s/604800)+" wk"; return Math.round(s/2592000)+" mo"; }
+function fmtRange(a,b){ const da=new Date(a),db=new Date(b),t=d=>d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}),d=x=>x.toLocaleDateString();
+  return (da.toDateString()===db.toDateString())?d(da)+" "+t(da)+"–"+t(db):d(da)+" "+t(da)+" – "+d(db)+" "+t(db); }
 function fmt(v,unit,dec){
   if(v==null||!isFinite(v))return "—"; const u=unit||"";
   if(u==="money")return v.toFixed(dec??2)+" "+CUR;
@@ -424,7 +426,8 @@ class Chart{
     if(nt==null){G.t=null;G.active=null;broadcast();this.tip.style.opacity=0;return;} G.t=nt;G.active=this; CHARTS.forEach(c=>{if(c!==this)c.tip.style.opacity=0;}); broadcast();
     const rows=this.series.map(s=>{const p=s.pts.find(q=>q[0]===nt); if(!p)return ""; let val=this.p.map?(this.p.map[Math.round(p[1])]||["—"])[0]:fmt(p[1],s.unit||this.p.unit,s.dec??this.p.dec);
       return `<div class="row"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${resolveColor(s.color||(this.p.map?(this.p.map[Math.round(p[1])]||["","var(--muted)"])[1]:"var(--muted)"))}"></i> ${s.label}</span><b>${val}</b></div>`;}).join("");
-    this.tip.innerHTML=`<div class="t">${new Date(nt).toLocaleString()}</div>${rows}`; this.tip.style.opacity=1;
+    const B=this.bucketMs||0, head=this.p.kind==="bars"?fmtRange(nt-B/2,nt+B/2):new Date(nt).toLocaleString();
+    this.tip.innerHTML=`<div class="t">${head}</div>${rows}`; this.tip.style.opacity=1;
     const rw=this.wrap.clientWidth; let left=this._X(nt)+12; if(left>rw-135)left=this._X(nt)-135; this.tip.style.left=Math.max(4,left)+"px"; this.tip.style.top="6px"; }
 }
 
