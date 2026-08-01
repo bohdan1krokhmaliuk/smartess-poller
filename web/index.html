@@ -62,7 +62,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .card.info{grid-column:span 12}
 .card.info .val{font-size:.92rem; font-weight:600; color:var(--text)}
 .card.info b{color:var(--muted); font-weight:600}
-.chartwrap{position:relative; width:100%; height:200px; touch-action:none}
+.chartwrap{position:relative; width:100%; height:200px; touch-action:pan-y}
 .chartwrap.tl{height:70px}
 .chartwrap canvas{position:absolute; inset:0; width:100%; height:100%}
 .legend{display:flex; flex-wrap:wrap; gap:.15rem .8rem; margin-top:.3rem; font-size:.72rem; color:var(--muted)}
@@ -627,7 +627,7 @@ function renderSky(c){ const el=c.el;
 
 async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
   { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
-  await Promise.all(cards.map(async c=>{ const p=c.p;
+  await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
