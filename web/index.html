@@ -415,16 +415,24 @@ class Chart{
   constructor(wrap,panel){ this.wrap=wrap; this.p=panel; this.series=[]; this.stepMs=60000; this.drag=null; CHARTS.push(this);
     this.base=document.createElement("canvas"); this.ov=document.createElement("canvas"); this.tip=document.createElement("div"); this.tip.className="tip"; wrap.append(this.base,this.ov,this.tip);
     this.ptrs=new Map();
-    this.ov.style.touchAction="pan-y";   // vertical drag scrolls the page; horizontal = scrub; two fingers = pinch-zoom
-    this.ov.addEventListener("pointermove",e=>{ if(this.ptrs.has(e.pointerId))this.ptrs.set(e.pointerId,this.mx(e));
-      if(this.pinch){ this._pinch(); return; } this.onMove(e); });
+    this.ov.style.touchAction="pan-y";   // vertical drag scrolls the page; horizontal = scrub; two fingers = pinch/pan
+    this.ov.addEventListener("pointermove",e=>{
+      if(e.pointerType!=="touch"){ this.onMove(e); return; }                  // mouse: hover / drag-zoom
+      if(this.ptrs.has(e.pointerId))this.ptrs.set(e.pointerId,this.mx(e));
+      if(this.pinch){ this._pinch(); return; }
+      if(this.pending){ const dx=e.clientX-this.pending.x, dy=e.clientY-this.pending.y;   // decide intent on the first real move
+        if(Math.abs(dx)<8&&Math.abs(dy)<8) return;
+        this.pending=null;
+        if(Math.abs(dx)>Math.abs(dy)) this.touch=true;                        // horizontal -> scrub
+        else return; }                                                        // vertical -> let the page scroll
+      if(this.touch) this.onMove(e); });
     this.ov.addEventListener("pointerleave",()=>{ if(this.pinch)return; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); });
     this.ov.addEventListener("pointerdown",e=>{
       if(e.pointerType!=="touch"){ this.ov.setPointerCapture(e.pointerId); this.drag={x0:this.mx(e),x1:this.mx(e)}; return; }
       this.ptrs.set(e.pointerId,this.mx(e));
-      if(this.ptrs.size===2){ this.touch=false; this.drag=null; this._pinchStart(); }   // two fingers -> pinch-zoom
-      else { this.touch=true; this.onMove(e); } });                                     // one finger -> scrub
-    const end=e=>{ this.ptrs.delete(e.pointerId);
+      if(this.ptrs.size===2){ this.touch=false; this.pending=null; this.drag=null; this._pinchStart(); }   // two fingers -> pinch/pan
+      else this.pending={x:e.clientX,y:e.clientY}; });                                                     // one finger -> wait to see the direction
+    const end=e=>{ this.ptrs.delete(e.pointerId); this.pending=null;
       if(this.pinch){ if(this.ptrs.size<2){ this.pinch=false; const r=range(); setAbs(r.from,r.to); } return; }
       if(this.drag){ const t0=this.xToT(this.drag.x0),t1=this.xToT(this.drag.x1); this.drag=null; if(Math.abs(t1-t0)>5000) setAbs(Math.min(t0,t1),Math.max(t0,t1)); this.drawOv(); return; }
       if(this.touch){ this.touch=false; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); } };
@@ -488,8 +496,9 @@ class Chart{
     const r=range(); this.pinchFrom=r.from; this.pinchTo=r.to; this.pinchCenterT=this.xToT((xs[0]+xs[1])/2);
     this.pinch=true; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); this.drawOv(); }
   _pinch(){ const xs=[...this.ptrs.values()]; if(xs.length<2)return; const d=Math.max(1,Math.abs(xs[0]-xs[1]));
-    const span0=this.pinchTo-this.pinchFrom; const span=Math.max(60000,Math.min(span0*this.pinchDist/d,366*864e5));   // spread fingers = zoom in; pinch = zoom out
-    const f=(this.pinchCenterT-this.pinchFrom)/span0, from=this.pinchCenterT-f*span;
+    const span0=this.pinchTo-this.pinchFrom; const span=Math.max(60000,Math.min(span0*this.pinchDist/d,366*864e5));   // finger distance = zoom (spread in, pinch out)
+    const g=this.geom(); let fracX=((xs[0]+xs[1])/2-g.pl)/Math.max(1,g.w-g.pl-g.pr); fracX=Math.max(0,Math.min(1,fracX));   // moving the midpoint sideways = pan (keeps the grabbed time under the fingers)
+    const from=this.pinchCenterT-fracX*span;
     state.kind="abs"; state.abs={from,to:from+span}; state.custom=true;
     if(this._raf)return; this._raf=requestAnimationFrame(()=>{ this._raf=0; CHARTS.forEach(c=>c.draw()); }); }
 }
