@@ -234,8 +234,8 @@ const SECTIONS=[
      {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
      {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
-   {t:"chart",pvhead:1,title:"Produced / available / unused (W)",unit:"W",span:9,series:[
-     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"}]},
+   {t:"chart",pvhead:1,title:"PV produced / available / unused / load (W)",unit:"W",span:9,series:[
+     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"},{label:"load",color:"var(--text)",width:2}]},
    {t:"sky",title:"Sun path & sky",span:3},
  ]},
  {name:"🔋 Battery", panels:[
@@ -311,8 +311,8 @@ const DESC={
  "Mode":"Inverter working mode — Line (from grid), Battery (off-grid), Bypass, etc.",
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
- "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available so far today; Appx unused today = the part you didn't use (est.); Cloud = current cloud cover.",
- "Produced / available / unused (W)":"Actual PV (green) vs clear-sky available (blue) over time; the shaded gap is solar you could have used but didn't.",
+ "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available for the whole day (forecast for the hours not yet passed); Appx unused today = the part you didn't use so far (est.); Cloud = current cloud cover.",
+ "PV produced / available / unused / load (W)":"Actual PV (green) vs weather-model available (blue) over time, the shaded unused gap, and your load (line) — see when solar covered the load and how much headroom went unused.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
@@ -414,15 +414,22 @@ function broadcast(){ CHARTS.forEach(c=>c.drawOv()); cards.forEach(c=>c.p&&c.p.t
 class Chart{
   constructor(wrap,panel){ this.wrap=wrap; this.p=panel; this.series=[]; this.stepMs=60000; this.drag=null; CHARTS.push(this);
     this.base=document.createElement("canvas"); this.ov=document.createElement("canvas"); this.tip=document.createElement("div"); this.tip.className="tip"; wrap.append(this.base,this.ov,this.tip);
-    this.ov.addEventListener("pointermove",e=>this.onMove(e));
-    this.ov.addEventListener("pointerleave",()=>{ G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); });
-    this.ov.style.touchAction="pan-y";   // vertical drag scrolls the page; horizontal drag scrubs the chart
-    this.ov.addEventListener("pointerdown",e=>{ this.ov.setPointerCapture(e.pointerId);
-      if(e.pointerType==="touch"){ this.touch=true; this.onMove(e); }   // touch: read the values under the finger, not range-select
-      else this.drag={x0:this.mx(e),x1:this.mx(e)}; });
-    this.ov.addEventListener("pointerup",e=>{ if(this.drag){ const t0=this.xToT(this.drag.x0),t1=this.xToT(this.drag.x1); this.drag=null; if(Math.abs(t1-t0)>5000) setAbs(Math.min(t0,t1),Math.max(t0,t1)); this.drawOv(); }
-      else if(this.touch){ this.touch=false; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); } });
-    this.ov.addEventListener("pointercancel",()=>{ this.drag=null; this.touch=false; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); });
+    this.ptrs=new Map();
+    this.ov.style.touchAction="pan-y";   // vertical drag scrolls the page; horizontal = scrub; two fingers = pinch-zoom
+    this.ov.addEventListener("pointermove",e=>{ if(this.ptrs.has(e.pointerId))this.ptrs.set(e.pointerId,this.mx(e));
+      if(this.pinch){ this._pinch(); return; } this.onMove(e); });
+    this.ov.addEventListener("pointerleave",()=>{ if(this.pinch)return; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); });
+    this.ov.addEventListener("pointerdown",e=>{
+      if(e.pointerType!=="touch"){ this.ov.setPointerCapture(e.pointerId); this.drag={x0:this.mx(e),x1:this.mx(e)}; return; }
+      this.ptrs.set(e.pointerId,this.mx(e));
+      if(this.ptrs.size===2){ this.touch=false; this.drag=null; this._pinchStart(); }   // two fingers -> pinch-zoom
+      else { this.touch=true; this.onMove(e); } });                                     // one finger -> scrub
+    const end=e=>{ this.ptrs.delete(e.pointerId);
+      if(this.pinch){ if(this.ptrs.size<2){ this.pinch=false; const r=range(); setAbs(r.from,r.to); } return; }
+      if(this.drag){ const t0=this.xToT(this.drag.x0),t1=this.xToT(this.drag.x1); this.drag=null; if(Math.abs(t1-t0)>5000) setAbs(Math.min(t0,t1),Math.max(t0,t1)); this.drawOv(); return; }
+      if(this.touch){ this.touch=false; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); } };
+    this.ov.addEventListener("pointerup",end);
+    this.ov.addEventListener("pointercancel",end);
     this.ov.addEventListener("dblclick",()=>{ if(state.kind==="preset")setPreset(state.dur); else refresh(); });
   }
   mx(e){ return e.clientX-this.base.getBoundingClientRect().left; }
@@ -477,6 +484,14 @@ class Chart{
     const B=this.bucketMs||0, head=this.p.kind==="bars"?fmtRange(nt-B/2,nt+B/2):new Date(nt).toLocaleString();
     this.tip.innerHTML=`<div class="t">${head}</div>${rows}`; this.tip.style.opacity=1;
     const rw=this.wrap.clientWidth; let left=this._X(nt)+12; if(left>rw-135)left=this._X(nt)-135; this.tip.style.left=Math.max(4,left)+"px"; this.tip.style.top="6px"; }
+  _pinchStart(){ const xs=[...this.ptrs.values()]; this.pinchDist=Math.max(1,Math.abs(xs[0]-xs[1]));
+    const r=range(); this.pinchFrom=r.from; this.pinchTo=r.to; this.pinchCenterT=this.xToT((xs[0]+xs[1])/2);
+    this.pinch=true; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); this.drawOv(); }
+  _pinch(){ const xs=[...this.ptrs.values()]; if(xs.length<2)return; const d=Math.max(1,Math.abs(xs[0]-xs[1]));
+    const span0=this.pinchTo-this.pinchFrom; const span=Math.max(60000,Math.min(span0*this.pinchDist/d,366*864e5));   // spread fingers = zoom in; pinch = zoom out
+    const f=(this.pinchCenterT-this.pinchFrom)/span0, from=this.pinchCenterT-f*span;
+    state.kind="abs"; state.abs={from,to:from+span}; state.custom=true;
+    if(this._raf)return; this._raf=requestAnimationFrame(()=>{ this._raf=0; CHARTS.forEach(c=>c.draw()); }); }
 }
 
 const main=document.getElementById("main"),cards=[]; const collapsed=new Set(JSON.parse(localStorage.getItem("collapsed")||"[]"));
@@ -571,8 +586,8 @@ const CLIENT={
   unusedKwh: async()=>{ if(pvPotentialW()==null)return null; const to=Date.now(),from=new Date().setHours(0,0,0,0),step=300;
     const pv=await qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step); let wh=0;
     for(const [t,v] of pv){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=Math.max(0,a-v)*step/3600; } return wh/1000; },
-  solarToday: async()=>{ if(pvPotentialW()==null)return null; const to=Date.now(),from=new Date().setHours(0,0,0,0),step=300000; let wh=0;   // modelled available solar energy so far today (kWh)
-    for(let t=from;t<=to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
+  solarToday: async()=>{ if(pvPotentialW()==null)return null; const from=new Date().setHours(0,0,0,0),to=from+864e5,step=300000; let wh=0;   // modelled available solar for the WHOLE day (forecast for the hours not yet passed)
+    for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
 };
 
 function renderSky(c){ const el=c.el;
@@ -607,9 +622,9 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else if(p.pvhead){ const pv=await qRange(`${AGG}_over_time((${M.pvpow})[${st}s])`,from,to,st); const conf=pvPotentialW()!=null; const avail=[],unused=[];
+      else if(p.pvhead){ const pv=await qRange(`${AGG}_over_time((${M.pvpow})[${st}s])`,from,to,st); const ld=await qRange(`${AGG}_over_time((${M.load})[${st}s])`,from,to,st); const conf=pvPotentialW()!=null; const avail=[],unused=[];
         for(const [t,v] of pv){ const a=conf?pvPotentialAt(new Date(t)):null; if(a!=null){ avail.push([t,a]); unused.push([t,Math.max(0,a-v)]); } }
-        c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:unused,fill:1}]); }
+        c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:unused,fill:1},{...p.series[3],pts:ld}]); }
       else { const series=await Promise.all(p.series.map(async s=>{ const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${st}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
