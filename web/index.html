@@ -416,8 +416,13 @@ class Chart{
     this.base=document.createElement("canvas"); this.ov=document.createElement("canvas"); this.tip=document.createElement("div"); this.tip.className="tip"; wrap.append(this.base,this.ov,this.tip);
     this.ov.addEventListener("pointermove",e=>this.onMove(e));
     this.ov.addEventListener("pointerleave",()=>{ G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); });
-    this.ov.addEventListener("pointerdown",e=>{this.ov.setPointerCapture(e.pointerId);this.drag={x0:this.mx(e),x1:this.mx(e)};});
-    this.ov.addEventListener("pointerup",e=>{ if(this.drag){ const t0=this.xToT(this.drag.x0),t1=this.xToT(this.drag.x1); this.drag=null; if(Math.abs(t1-t0)>5000) setAbs(Math.min(t0,t1),Math.max(t0,t1)); this.drawOv(); }});
+    this.ov.style.touchAction="pan-y";   // vertical drag scrolls the page; horizontal drag scrubs the chart
+    this.ov.addEventListener("pointerdown",e=>{ this.ov.setPointerCapture(e.pointerId);
+      if(e.pointerType==="touch"){ this.touch=true; this.onMove(e); }   // touch: read the values under the finger, not range-select
+      else this.drag={x0:this.mx(e),x1:this.mx(e)}; });
+    this.ov.addEventListener("pointerup",e=>{ if(this.drag){ const t0=this.xToT(this.drag.x0),t1=this.xToT(this.drag.x1); this.drag=null; if(Math.abs(t1-t0)>5000) setAbs(Math.min(t0,t1),Math.max(t0,t1)); this.drawOv(); }
+      else if(this.touch){ this.touch=false; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); } });
+    this.ov.addEventListener("pointercancel",()=>{ this.drag=null; this.touch=false; G.t=null; G.active=null; CHARTS.forEach(c=>c.tip.style.opacity=0); broadcast(); });
     this.ov.addEventListener("dblclick",()=>{ if(state.kind==="preset")setPreset(state.dur); else refresh(); });
   }
   mx(e){ return e.clientX-this.base.getBoundingClientRect().left; }
