@@ -219,7 +219,7 @@ const SECTIONS=[
  ]},
  {name:"📊 Power by source", panels:[
    {t:"chart",title:"Sources & load (W)",unit:"W",span:8,series:[
-     {expr:M.pvpow,label:"solar",color:C.pv},{expr:M.battdis,label:"battery",color:C.bat},
+     {expr:M.pvpow,label:"solar",color:C.pv},{avail:1,label:"solar avail",color:"#14b8a6"},{expr:M.battdis,label:"battery",color:C.bat},
      {expr:M.grid,label:"grid",color:C.grid},{expr:M.load,label:"load",color:"var(--text)",width:2}]},
    {t:"chart",title:"Self-sufficiency %",unit:"%",min:0,max:100,span:4,series:[{expr:M.selfnow,label:"PV coverage",color:C.pv,fill:1}]},
    {t:"chart",title:"Output power",unit:"W",span:6,series:[{expr:M.load,label:"active",color:"#3b82f6"},{expr:M.apparent,label:"apparent",color:"#a855f7"}]},
@@ -234,8 +234,8 @@ const SECTIONS=[
      {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
      {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
-   {t:"chart",pvhead:1,title:"PV produced / available / unused / load (W)",unit:"W",span:9,series:[
-     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"},{label:"load",color:"var(--text)",width:2}]},
+   {t:"chart",pvhead:1,title:"Produced / available / unused (W)",unit:"W",span:9,series:[
+     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"}]},
    {t:"sky",title:"Sun path & sky",span:3},
  ]},
  {name:"🔋 Battery", panels:[
@@ -312,7 +312,7 @@ const DESC={
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
  "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available for the whole day (forecast for the hours not yet passed); Appx unused today = the part you didn't use so far (est.); Cloud = current cloud cover.",
- "PV produced / available / unused / load (W)":"Actual PV (green) vs weather-model available (blue) over time, the shaded unused gap, and your load (line) — see when solar covered the load and how much headroom went unused.",
+ "Produced / available / unused (W)":"Actual PV (green) vs weather-model available (blue) over time; the shaded gap is solar you could have used but didn't.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
@@ -322,7 +322,7 @@ const DESC={
  "Self-sufficiency":"Share of consumption covered by solar over the selected range (PV ÷ consumed).",
  "PV total (life)":"Lifetime solar generation counter reported by the inverter itself (QET).",
  "Cost":"Estimated cost for the selected range: Total = all consumption × tariff, Grid = grid energy × tariff, Solar saved = value of the solar-covered part.",
- "Sources & load (W)":"Instantaneous power from solar, battery and grid, plus total load, over time.",
+ "Sources & load (W)":"Instantaneous power from solar (and its weather-model available ceiling, teal), battery and grid, plus total load, over time.",
  "Self-sufficiency %":"Share of the load covered by solar at each moment.",
  "Output power":"Inverter output: active power (W, real work) vs apparent power (VA).",
  "Load %":"Inverter output load as a % of rated power, over time.",
@@ -631,10 +631,11 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else if(p.pvhead){ const pv=await qRange(`${AGG}_over_time((${M.pvpow})[${st}s])`,from,to,st); const ld=await qRange(`${AGG}_over_time((${M.load})[${st}s])`,from,to,st); const conf=pvPotentialW()!=null; const avail=[],unused=[];
+      else if(p.pvhead){ const pv=await qRange(`${AGG}_over_time((${M.pvpow})[${st}s])`,from,to,st); const conf=pvPotentialW()!=null; const avail=[],unused=[];
         for(const [t,v] of pv){ const a=conf?pvPotentialAt(new Date(t)):null; if(a!=null){ avail.push([t,a]); unused.push([t,Math.max(0,a-v)]); } }
-        c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:unused,fill:1},{...p.series[3],pts:ld}]); }
-      else { const series=await Promise.all(p.series.map(async s=>{ const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${st}s])`,from,to,st)}; })); c.chart.setData(series); }
+        c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:unused,fill:1}]); }
+      else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // client-computed weather-model available solar
+        const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${st}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
