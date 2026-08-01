@@ -487,7 +487,7 @@ class Chart{
   onMove(e){ if(!this._X)return; const mx=this.mx(e); if(this.drag){this.drag.x1=mx;this.drawOv();return;}
     const t=this.xToT(mx); let nt=null,nd=1e15; (this.series[0]&&this.series[0].pts||[]).forEach(p=>{const d=Math.abs(p[0]-t);if(d<nd){nd=d;nt=p[0];}});
     if(nt==null){G.t=null;G.active=null;broadcast();this.tip.style.opacity=0;return;} G.t=nt;G.active=this; CHARTS.forEach(c=>{if(c!==this)c.tip.style.opacity=0;}); broadcast();
-    const rows=this.series.map(s=>{const p=s.pts.find(q=>q[0]===nt); if(!p)return ""; let val=this.p.map?(this.p.map[Math.round(p[1])]||["—"])[0]:fmt(p[1],s.unit||this.p.unit,s.dec??this.p.dec);
+    const rows=this.series.map(s=>{ if(!s.pts||!s.pts.length)return ""; let p=null,pd=1/0; for(const q of s.pts){const d=Math.abs(q[0]-nt); if(d<pd){pd=d;p=q;}} if(!p||pd>this.stepMs*2)return ""; let val=this.p.map?(this.p.map[Math.round(p[1])]||["—"])[0]:fmt(p[1],s.unit||this.p.unit,s.dec??this.p.dec);
       return `<div class="row"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${resolveColor(s.color||(this.p.map?(this.p.map[Math.round(p[1])]||["","var(--muted)"])[1]:"var(--muted)"))}"></i> ${s.label}</span><b>${val}</b></div>`;}).join("");
     const B=this.bucketMs||0, head=this.p.kind==="bars"?fmtRange(nt-B/2,nt+B/2):new Date(nt).toLocaleString();
     this.tip.innerHTML=`<div class="t">${head}</div>${rows}`; this.tip.style.opacity=1;
