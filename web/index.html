@@ -238,7 +238,7 @@ const SECTIONS=[
      {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"}]},
    {t:"sky",title:"Sun path & sky",span:3},
  ]},
- {name:"🔋 Battery", panels:[
+ {name:"🔋 Battery", battmode:1, panels:[
    {t:"multi",title:"Charging now",span:6,items:[
      {label:"Current",expr:M.chg,live:1,unit:"A",dec:1,color:"var(--good)"},
      {label:"Power",expr:"inverter_battery_voltage*inverter_battery_charge_current",live:1,unit:"W",color:"var(--good)"},
@@ -503,11 +503,18 @@ class Chart{
     if(this._raf)return; this._raf=requestAnimationFrame(()=>{ this._raf=0; CHARTS.forEach(c=>c.draw()); }); }
 }
 
+function applyBattMode(m){ const bt=document.getElementById("battModeToggle"); if(!bt)return;
+  if(m==="backup"){ bt.dataset.mode="backup"; bt.textContent="🔋 Backup 95%"; bt.style.color="var(--warn)"; bt.style.borderColor="var(--warn)"; }
+  else if(m==="eco"){ bt.dataset.mode="eco"; bt.textContent="🔋 Eco 80%"; bt.style.color="var(--good)"; bt.style.borderColor="var(--good)"; }
+  else { bt.dataset.mode=""; bt.textContent="🔋 —"; bt.style.color="var(--muted)"; bt.style.borderColor="var(--grid)"; } }
 const main=document.getElementById("main"),cards=[]; const collapsed=new Set(JSON.parse(localStorage.getItem("collapsed")||"[]"));
 for(const sec of SECTIONS){ const head=document.createElement("div");head.className="section";head.innerHTML=`<span class="caret">▾</span> ${sec.name}`;
   if(sec.bms){ const tg=document.createElement("span"); tg.id="bmsToggle"; tg.textContent="⏻ BMS"; tg.style.cssText="margin-left:auto;font-size:.66rem;padding:2px 8px;border:1px solid var(--grid);border-radius:10px;cursor:pointer;color:var(--muted);text-transform:none;letter-spacing:0";
     tg.title="Connect / disconnect the BMS over Bluetooth (disconnect to use the JK phone app; also auto-off when the inverter is offline)";
     tg.addEventListener("click",ev=>{ ev.stopPropagation(); const on=tg.dataset.on==="1"; fetch("/bms/"+(on?"off":"on")).catch(()=>{}); tg.textContent="⏳ BMS"; }); head.append(tg); }
+  if(sec.battmode){ const bt=document.createElement("span"); bt.id="battModeToggle"; bt.textContent="🔋 …"; bt.style.cssText="margin-left:auto;font-size:.66rem;padding:2px 8px;border:1px solid var(--grid);border-radius:10px;cursor:pointer;color:var(--muted);text-transform:none;letter-spacing:0";
+    bt.title="Charge target: Eco 80% (float 54.2 V) when the grid is stable · Backup 95% (float 55.0 V) before outages. Writes the inverter float voltage — needs local mode.";
+    bt.addEventListener("click",async ev=>{ ev.stopPropagation(); if(bt.textContent==="⏳")return; const backup=bt.dataset.mode==="backup"; bt.textContent="⏳"; try{ const j=await (await fetch("/battery/"+(backup?"eco":"backup"))).json(); applyBattMode(j.battery_mode); if(j.ok===false) alert("Не вдалося встановити float: "+(j.reply||j.error||"?")); }catch(e){ applyBattMode(null); } }); head.append(bt); }
   main.append(head);
   const grid=document.createElement("div");grid.className="grid";main.append(grid);
   head.addEventListener("click",()=>{ const on=grid.classList.toggle("hidden"); head.classList.toggle("collapsed",on); if(on)collapsed.add(sec.name);else collapsed.delete(sec.name); localStorage.setItem("collapsed",JSON.stringify([...collapsed])); if(!on)cards.forEach(c=>c.chart&&c.chart.draw()); });
@@ -647,6 +654,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
   { const tg=document.getElementById("bmsToggle"); if(tg){ const fresh=await qInstant("bms_soc and (time()-timestamp(bms_soc) < 90)",Date.now()); const on=fresh!=null; tg.dataset.on=on?"1":"0"; tg.textContent="⏻ BMS"; tg.style.color=on?"var(--good)":"var(--muted)"; tg.style.borderColor=on?"var(--good)":"var(--grid)"; } }
+  { const bt=document.getElementById("battModeToggle"); if(bt && bt.textContent!=="⏳"){ try{ const j=await (await fetch("/battery")).json(); applyBattMode(j.battery_mode); }catch(e){} } }
   loadMode();
 }
 

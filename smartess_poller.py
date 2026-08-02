@@ -30,6 +30,7 @@ import configparser
 import http.server
 import json
 import os
+import queue
 import socket
 import sys
 import threading
@@ -103,6 +104,53 @@ QMN   = bytes.fromhex("ff04514d4ebb640d")       # model name (static)
 QPI   = bytes.fromhex("ff04515049beac0d")       # protocol id (static)
 QVFW  = bytes.fromhex("ff045156465762990d")     # main CPU firmware (static)
 QVFW3 = bytes.fromhex("ff045156465733d3d40d")   # secondary firmware (static)
+
+# ---- battery float-voltage presets (Eco/Backup dashboard toggle) ----------
+# Two safe presets for the 16S LiFePO4 pack. The dashboard toggle writes one of
+# these to the inverter's FLOAT voltage (PI30 PBFT): Eco keeps the pack ~80% for
+# longevity when the grid is stable; Backup tops it to ~95% before outages.
+# Requires "local" mode (we own the RS485 bus); a no-op in "mirror".
+BATT_PRESETS = {"eco": 54.2, "backup": 55.0}
+_batt_q = queue.Queue()          # (volts, Event, result_box); drained by the local poll loop
+
+
+def _pi30_crc(data):
+    """Voltronic PI30 CRC-16 (CCITT/XMODEM) with 0x28/0x0d/0x0a byte-stuffing."""
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) if (crc & 0x8000) else (crc << 1)
+            crc &= 0xFFFF
+    out = bytearray([(crc >> 8) & 0xFF, crc & 0xFF])
+    for i in (0, 1):
+        if out[i] in (0x28, 0x0d, 0x0a):     # avoid '(' / CR / LF in the CRC bytes
+            out[i] += 1
+    return bytes(out)
+
+
+def pi30_cmd(cmd):
+    """Build an FF04 command frame (FF 04 <ASCII> <CRC16> 0D) from an ASCII command."""
+    a = cmd.encode("ascii")
+    return b"\xff\x04" + a + _pi30_crc(a) + b"\x0d"
+
+
+def battery_mode_for(volts):
+    """Map a float voltage to the toggle's mode label (or None if unknown)."""
+    if not isinstance(volts, (int, float)):
+        return None
+    return "backup" if volts >= 54.9 else "eco"
+
+
+def queue_set_float(volts):
+    """Thread-safe: ask the (local) poll loop to write the battery float voltage,
+    then block briefly for the ACK/NAK. Returns {ok, reply, volts}."""
+    volts = max(50.0, min(55.6, float(volts)))          # hard safety clamp
+    ev = threading.Event()
+    box = {"ok": None, "reply": "", "volts": volts}
+    _batt_q.put((volts, ev, box))
+    ev.wait(timeout=20)                                 # loop drains once per poll (~10 s)
+    return box
 
 # device identity, filled as the static commands come in; served at /info
 INFO = {}
@@ -509,6 +557,28 @@ def handle_fakeclient(sock, mc, cfg):
     last_keepalive = time.time()
     last_energy = 0.0
     while True:
+        # apply any queued battery float-voltage change (dashboard Eco/Backup toggle)
+        while True:
+            try:
+                _v, _ev, _box = _batt_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                _rep = voltronic_text(request(sock, reader, pi30_cmd("PBFT%.1f" % _v)))
+                _box["ok"] = (_rep == "ACK")
+                _box["reply"] = _rep if _rep is not None else "(no reply)"
+                if _box["ok"]:
+                    dispatch_reply(mc, topic, "QPIRI", request(sock, reader, QPIRI))  # refresh RATED
+                    mc.publish(topic + "battery_mode", battery_mode_for(_v), retain=True)
+                    print(time.strftime("%H:%M:%S"), "battery float ->",
+                          "%.1f V (%s)" % (_v, battery_mode_for(_v)))
+                else:
+                    print(time.strftime("%H:%M:%S"), "battery float set FAILED:", _box["reply"])
+            except Exception as _e:
+                _box["ok"], _box["reply"] = False, str(_e)
+            finally:
+                _ev.set()
+
         txt = voltronic_text(request(sock, reader, QPIGS))
         if txt and txt[:1].isdigit():
             publish_qpigs(mc, topic, txt)
@@ -669,6 +739,27 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 if mc is not None:
                     mc.publish(topic + "bms_control", st, retain=True)
                 self._reply(200, "application/json", json.dumps({"bms": st}))
+                return
+
+            # battery charge target: GET /battery (state) or /battery/{eco,backup} (set float V)
+            if p.endswith("/battery") or p.endswith("/battery/eco") or p.endswith("/battery/backup"):
+                fv = RATED.get("float_v")
+                cur = battery_mode_for(fv)
+                if p.endswith("/battery/eco") or p.endswith("/battery/backup"):
+                    want = p.rsplit("/", 1)[1]
+                    with state_lock:
+                        cur_mode = state["mode"]
+                    if cur_mode != "local":            # can't touch the bus while the dongle owns it
+                        self._reply(409, "application/json", json.dumps(
+                            {"error": "battery setpoint needs local mode",
+                             "mode": cur_mode, "battery_mode": cur}))
+                        return
+                    box = queue_set_float(BATT_PRESETS[want])
+                    self._reply(200, "application/json", json.dumps(
+                        {"battery_mode": (want if box["ok"] else cur), "float": box["volts"],
+                         "ok": bool(box["ok"]), "reply": box.get("reply", "")}))
+                    return
+                self._reply(200, "application/json", json.dumps({"battery_mode": cur, "float": fv}))
                 return
 
             if path.startswith("/vm/"):
