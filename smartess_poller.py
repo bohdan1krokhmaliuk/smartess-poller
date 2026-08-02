@@ -156,6 +156,8 @@ def queue_set_float(volts):
 INFO = {}
 # rated charge targets from QPIRI, surfaced as metrics for the dashboard
 RATED = {}
+# full parsed QPIRI snapshot (all fields + enum *_name), served read-only at /rated
+RATED_ALL = {}
 # dashboard settings shared across clients (served/saved at /settings)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_settings.json")
 
@@ -456,6 +458,13 @@ def publish_qpiri(mc, topic, text):
                      ("max_charging_current", "max_charge_a")):
         if isinstance(vals.get(src), (int, float)):
             RATED[dst] = vals[src]
+    # full snapshot (with resolved enum names) for the read-only settings page
+    snap = dict(vals)
+    for name in QPIRI_ENUMS:
+        if name in vals:
+            snap[name + "_name"] = QPIRI_ENUMS[name].get(str(vals[name]), vals[name])
+    RATED_ALL.clear()
+    RATED_ALL.update(snap)
     mc.publish(topic + "rated_info", text, retain=True)
 
 
@@ -556,6 +565,7 @@ def handle_fakeclient(sock, mc, cfg):
 
     last_keepalive = time.time()
     last_energy = 0.0
+    last_rated = 0.0
     while True:
         # apply any queued battery float-voltage change (dashboard Eco/Backup toggle)
         while True:
@@ -597,6 +607,11 @@ def handle_fakeclient(sock, mc, cfg):
             if energy:
                 publish_qet(mc, topic, energy)
             last_energy = time.time()
+
+        # settings (QPIRI) change rarely; refresh every few minutes for the config page
+        if time.time() - last_rated > 300:
+            dispatch_reply(mc, topic, "QPIRI", request(sock, reader, QPIRI))
+            last_rated = time.time()
 
         if time.time() - last_keepalive > 30:
             try:
@@ -779,6 +794,18 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
 
             if path == "/info":
                 self._reply(200, "application/json", json.dumps(INFO))
+                return
+
+            if path == "/rated":                       # full QPIRI snapshot (read-only)
+                self._reply(200, "application/json", json.dumps(RATED_ALL))
+                return
+
+            if path in ("/inverter", "/inverter.html"):
+                try:
+                    with open(os.path.join(web_dir, "inverter.html"), "rb") as f:
+                        self._reply(200, "text/html; charset=utf-8", f.read())
+                except Exception:
+                    self._reply(404, "text/plain", "inverter page not found")
                 return
 
             if path == "/settings":
