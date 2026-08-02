@@ -190,6 +190,10 @@ const dv={
 dv.gridCost=w=>`(${dv.grid(w)})*${TARIFF}`;
 dv.savings=w=>`clamp_min((${dv.cons(w)})-(${dv.grid(w)}),0)*${TARIFF}`;
 dv.total=w=>`(${dv.cons(w)})*${TARIFF}`;
+// solar potential energy (kWh) from the weather ceiling, and how much of it was actually captured
+dv.potential=w=>`avg_over_time(weather_pv_potential_w[${w}s]) * ${w}/3600000`;
+dv.wasted=w=>`clamp_min((${dv.potential(w)}) - (${dv.pv(w)}), 0)`;
+dv.captured=w=>`clamp_max(100*(${dv.pv(w)})/(${dv.potential(w)}), 100)`;
 // "today" = delta of the monotonic lifetime counters since local midnight (robust to poller restarts;
 // matches the Energy tiles when the Today preset is selected). Ignores the passed window.
 const todaySec=()=>Math.max(60,Math.round((Date.now()-new Date().setHours(0,0,0,0))/1000));
@@ -230,6 +234,12 @@ const SECTIONS=[
    {t:"stat",title:"Self-sufficiency",dyn:dv.self,unit:"%",dec:0,span:2,th:[[0,"var(--warn)"],[50,"var(--good)"]]},
    {t:"stat",title:"PV total (life)",expr:M.pvtot,live:1,unit:"kWh",dec:1,span:2},
  ]},
+ {name:"☀️ Solar potential vs used", note:"How much the sun offered vs what the array actually harvested over the selected range. The rest is lost (battery full / no export).", panels:[
+   {t:"stat",title:"Potential",dyn:dv.potential,unit:"kWh",dec:1,span:3,th:[[0,"#3b82f6"]]},
+   {t:"stat",title:"Produced",dyn:dv.pv,unit:"kWh",dec:1,span:3,th:[[0,C.pv]]},
+   {t:"stat",title:"Wasted",dyn:dv.wasted,unit:"kWh",dec:1,span:3,th:[[0,"var(--warn)"]]},
+   {t:"stat",title:"Captured",dyn:dv.captured,unit:"%",dec:0,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]]},
+ ]},
  {name:"📊 Power by source", panels:[
    {t:"chart",title:"Sources & load (W)",unit:"W",span:8,series:[
      {expr:M.pvpow,label:"solar",color:C.pv},{avail:1,label:"solar avail",color:"#14b8a6"},{expr:M.battdis,label:"battery",color:C.bat},
@@ -245,6 +255,7 @@ const SECTIONS=[
      {label:"Spare now",client:"spareNow",unit:"W",color:C.pv},
      {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
      {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
+     {label:"Appx solar tomorrow",client:"solarTomorrow",unit:"kWh",dec:2,color:"#3b82f6"},
      {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
    {t:"chart",pvhead:1,title:"Produced / available (W)",unit:"W",span:9,series:[
@@ -285,6 +296,7 @@ const SECTIONS=[
  ]},
  {name:"📈 History & state", panels:[
    {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
+     {power:"weather_pv_potential_w",label:"potential",color:"#3b82f6"},
      {counter:"energymeter_pv_total",power:"inverter_pv_input_voltage*inverter_pv_input_current",label:"generated",color:C.pv},
      {counter:"energymeter_consumed_total",power:"inverter_ac_output_active_power",label:"consumed",color:C.cons}]},
    {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
@@ -608,7 +620,7 @@ function renderGauge2(c){ const p=c.p, vals=c.last||[], subs=c.subv||[];   // tw
 let WEATHER=null;
 async function fetchWeather(){ if(PVLAT==null||PVLON==null){ WEATHER=null; return; }
   const tilt=Math.round(PVTILT==null?30:PVTILT), omaz=Math.round((PVAZ==null?180:PVAZ)-180);  // Open-Meteo azimuth: 0=S,+W
-  try{ const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${PVLAT}&longitude=${PVLON}&current=cloud_cover,temperature_2m&hourly=global_tilted_irradiance,cloud_cover,temperature_2m&tilt=${tilt}&azimuth=${omaz}&past_days=2&forecast_days=1&timezone=GMT`);
+  try{ const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${PVLAT}&longitude=${PVLON}&current=cloud_cover,temperature_2m&hourly=global_tilted_irradiance,cloud_cover,temperature_2m&tilt=${tilt}&azimuth=${omaz}&past_days=2&forecast_days=2&timezone=GMT`);
     const j=await r.json(); const w=j.current?{cloud:j.current.cloud_cover,temp:j.current.temperature_2m}:{};
     if(j.hourly&&j.hourly.time){ w.gti=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.global_tilted_irradiance[i]]).filter(p=>p[1]!=null);
       w.cloudH=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.cloud_cover[i]]);
@@ -633,6 +645,8 @@ const CLIENT={
     const pv=await qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step); let wh=0;
     for(const [t,v] of pv){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=Math.max(0,a-v)*step/3600; } return wh/1000; },
   solarToday: async()=>{ if(pvPotentialW()==null)return null; const from=new Date().setHours(0,0,0,0),to=from+864e5,step=300000; let wh=0;   // modelled available solar for the WHOLE day (forecast for the hours not yet passed)
+    for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
+  solarTomorrow: async()=>{ if(pvPotentialW()==null)return null; const from=new Date().setHours(0,0,0,0)+864e5,to=from+864e5,step=300000; let wh=0;   // forecast solar potential for tomorrow (needs forecast_days=2)
     for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
 };
 
@@ -669,7 +683,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
   await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
-        const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000)`:``); const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
+        const series=await Promise.all(p.series.map(async s=>{ const base=s.counter?`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000)`:``):`avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
       else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // available = solar potential: historical from the DB (real weather), recent from the client model (forecast-aware)
         const [pv,availVM]=await Promise.all([
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
