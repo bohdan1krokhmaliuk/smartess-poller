@@ -247,8 +247,8 @@ const SECTIONS=[
      {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
      {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
-   {t:"chart",pvhead:1,title:"Produced / available / expected (W)",unit:"W",span:9,series:[
-     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"expected",color:"#f97316"}]},
+   {t:"chart",pvhead:1,title:"Produced / available (W)",unit:"W",span:9,series:[
+     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"}]},
    {t:"sky",title:"Sun path & sky",span:3},
  ]},
  {name:"🔋 Battery", battmode:1, panels:[
@@ -325,7 +325,7 @@ const DESC={
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
  "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available for the whole day (forecast for the hours not yet passed); Appx unused today = the part you didn't use so far (est.); Cloud = current cloud cover.",
- "Produced / available / expected (W)":"Green (filled) = actual PV. Blue = weather-model ceiling (all the sun the array could catch). Orange = expected harvest = min(ceiling, load + battery charging) — the realistic limit given there has to be somewhere to put the power. Ceiling→expected gap = spare you couldn't use (battery full / low load); expected→produced gap = the rest (inverter throttles PV when the battery is full).",
+ "Produced / available (W)":"Green (filled) = actual PV the array made. Blue = solar potential — how much the array could have produced given the real weather that day (what could have gone to grid). The gap between them is solar that went unused. Historical days use the real backfilled weather; recent days use the live weather model.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
@@ -668,17 +668,13 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000)`:``); const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // historical: real potential from the DB (hourly weather); recent: client model (forecast-aware)
-        const [pv,load,chg,availVM]=await Promise.all([
+      else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // available = solar potential: historical from the DB (real weather), recent from the client model (forecast-aware)
+        const [pv,availVM]=await Promise.all([
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
-          conf?qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st):Promise.resolve([]),
-          conf?qRange(`${AGG}_over_time((inverter_battery_voltage*inverter_battery_charge_current)[${aw}s])`,from,to,st):Promise.resolve([]),
           histView?qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st):Promise.resolve(null) ]);
-        const loadM=new Map(load.map(p=>[p[0],p[1]])), chgM=new Map(chg.map(p=>[p[0],p[1]])), availM=availVM?new Map(availVM.map(p=>[p[0],p[1]])):null; const avail=[],expected=[]; let lastL=null,lastC=null;
-        for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null); if(a!=null){ avail.push([t,a]);   // expected harvest = ceiling capped by where the power can actually go (load + battery charging)
-          const l=loadM.get(t),c=chgM.get(t); if(l!=null)lastL=l; if(c!=null)lastC=c;   // carry forward: load is sparser than pv on 5-min history, so hold last value instead of dropping the sink to 0
-          const sink=(lastL||0)+Math.max(0,lastC||0); expected.push([t,Math.min(a,sink)]); } }
-        c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail},{...p.series[2],pts:expected}]); }
+        const availM=availVM?new Map(availVM.map(p=>[p[0],p[1]])):null; const avail=[];
+        for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null); if(a!=null)avail.push([t,a]); }
+        c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail}]); }
       else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ if(histView) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // historical: real potential from the DB (backfilled weather)
         const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // recent: client weather-model available solar
         const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${aw}s])`,from,to,st)}; })); c.chart.setData(series); }
