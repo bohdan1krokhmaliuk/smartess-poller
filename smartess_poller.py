@@ -113,7 +113,7 @@ QFLAG = bytes.fromhex("ff0451464c414798740d")   # device on/off feature flags
 # longevity when the grid is stable; Backup tops it to ~95% before outages.
 # Requires "local" mode (we own the RS485 bus); a no-op in "mirror".
 BATT_PRESETS = {"eco": 54.2, "backup": 55.6}
-_batt_q = queue.Queue()          # (volts, Event, result_box); drained by the local poll loop
+_cmd_q = queue.Queue()           # (ascii PI30 SET command, Event, result_box); drained by the local poll loop
 
 
 def _pi30_crc(data):
@@ -144,14 +144,22 @@ def battery_mode_for(volts):
     return "backup" if volts >= 54.9 else "eco"
 
 
-def queue_set_float(volts):
-    """Thread-safe: ask the (local) poll loop to write the battery float voltage,
-    then block briefly for the ACK/NAK. Returns {ok, reply, volts}."""
-    volts = max(50.0, min(55.6, float(volts)))          # hard safety clamp
+def queue_cmd(ascii_cmd):
+    """Thread-safe: ask the local poll loop to send a PI30 SET command over RS485 and
+    block briefly for the ACK/NAK. Returns {ok, reply, cmd}. Local mode only (the loop
+    owns the bus). The loop re-reads QPIRI+QFLAG after a successful write."""
     ev = threading.Event()
-    box = {"ok": None, "reply": "", "volts": volts}
-    _batt_q.put((volts, ev, box))
+    box = {"ok": None, "reply": "", "cmd": ascii_cmd}
+    _cmd_q.put((ascii_cmd, ev, box))
     ev.wait(timeout=20)                                 # loop drains once per poll (~10 s)
+    return box
+
+
+def queue_set_float(volts):
+    """Set the battery FLOAT voltage (Eco/Backup toggle). Hard-clamped."""
+    volts = max(50.0, min(55.6, float(volts)))
+    box = queue_cmd("PBFT%.1f" % volts)
+    box["volts"] = volts
     return box
 
 # device identity, filled as the static commands come in; served at /info
@@ -398,6 +406,63 @@ QPIRI_ENUMS = {
     "output_mode": {"0": "SingleMachine", "1": "Parallel", "2": "Phase1",
                     "3": "Phase2", "4": "Phase3"},
 }
+
+# --------------------------------------------------------- settings CONTROL (write)
+# Controllable settings via PI30 SET commands. Every value is validated and hard-clamped
+# to a safe LiFePO4 range; writes are LOCAL-mode only and confirmed by a QPIRI re-read.
+# Charge-current setters (MNCHGC/MUCHGC) are intentionally omitted until their exact
+# format is confirmed on this firmware.
+def _vset(prefix, lo, hi):
+    return {"type": "float", "min": lo, "max": hi, "step": 0.1,
+            "cmd": lambda v: "%s%.1f" % (prefix, max(lo, min(hi, float(v))))}
+
+SET_CATALOG = {
+    "battery_float_voltage":       _vset("PBFT", 50.0, 56.4),
+    "battery_bulk_voltage":        _vset("PCVV", 52.0, 57.6),
+    "battery_recharge_voltage":    _vset("PBCV", 44.0, 51.0),
+    "battery_redischarge_voltage": {"type": "float", "min": 0.0, "max": 58.0, "step": 0.1,
+                                    "cmd": lambda v: "PBDV%.1f" % max(0.0, min(58.0, float(v)))},
+    "battery_under_voltage":       _vset("PSDV", 42.0, 48.0),
+    "output_source_priority":      {"type": "enum", "options": {0: "Utility", 1: "Solar", 2: "SBU"},
+                                    "cmd": lambda v: "POP%02d" % int(v)},
+    "charger_source_priority":     {"type": "enum", "options": {0: "UtilityFirst", 1: "SolarFirst",
+                                                                2: "Solar+Utility", 3: "OnlySolar"},
+                                    "cmd": lambda v: "PCP%02d" % int(v)},
+    "battery_type":                {"type": "enum", "options": {0: "AGM", 1: "Flooded", 2: "User"},
+                                    "cmd": lambda v: "PBT%02d" % int(v)},
+}
+FLAG_LETTERS = {"flag_" + name: letter for letter, name in QFLAG_NAMES.items()}
+
+
+def build_set_cmd(key, value):
+    """Return the ASCII PI30 SET command for (key, value), validated/clamped, or None."""
+    spec = SET_CATALOG.get(key)
+    if spec:
+        try:
+            if spec["type"] == "enum":
+                return spec["cmd"](int(value)) if int(value) in spec["options"] else None
+            return spec["cmd"](float(value))
+        except (ValueError, TypeError):
+            return None
+    if key in FLAG_LETTERS:
+        on = str(value).lower() in ("1", "true", "on")
+        return "P" + ("E" if on else "D") + FLAG_LETTERS[key]
+    return None
+
+
+def catalog_json():
+    """Serializable description of the controllable settings, for the dashboard UI."""
+    out = {}
+    for key, spec in SET_CATALOG.items():
+        d = {"type": spec["type"]}
+        if "options" in spec:
+            d["options"] = spec["options"]
+        if "min" in spec:
+            d.update(min=spec["min"], max=spec["max"], step=spec.get("step", 0.1))
+        out[key] = d
+    for key in FLAG_LETTERS:
+        out[key] = {"type": "flag"}
+    return out
 
 # QPIGS "device status" byte (b7..b0), left-to-right in the 8-char string.
 QPIGS_STATUS_BITS = {  # topic_name: string index
@@ -764,23 +829,29 @@ def handle_fakeclient(sock, mc, cfg):
     last_energy = 0.0
     last_rated = 0.0
     while True:
-        # apply any queued battery float-voltage change (dashboard Eco/Backup toggle)
+        # apply any queued SET command (battery toggle + settings-control page)
         while True:
             try:
-                _v, _ev, _box = _batt_q.get_nowait()
+                _ascii, _ev, _box = _cmd_q.get_nowait()
             except queue.Empty:
                 break
             try:
-                _rep = voltronic_text(request(sock, reader, pi30_cmd("PBFT%.1f" % _v)))
+                _rep = voltronic_text(request(sock, reader, pi30_cmd(_ascii)))
                 _box["ok"] = (_rep == "ACK")
                 _box["reply"] = _rep if _rep is not None else "(no reply)"
-                if _box["ok"]:
-                    dispatch_reply(mc, topic, "QPIRI", request(sock, reader, QPIRI))  # refresh RATED
-                    mc.publish(topic + "battery_mode", battery_mode_for(_v), retain=True)
-                    print(time.strftime("%H:%M:%S"), "battery float ->",
-                          "%.1f V (%s)" % (_v, battery_mode_for(_v)))
-                else:
-                    print(time.strftime("%H:%M:%S"), "battery float set FAILED:", _box["reply"])
+                if _box["ok"]:                                   # confirm by re-reading the rated info
+                    dispatch_reply(mc, topic, "QPIRI", request(sock, reader, QPIRI))
+                    try:
+                        publish_qflag(mc, topic, voltronic_text(request(sock, reader, QFLAG)))
+                    except Exception:
+                        pass
+                    if _ascii.startswith("PBFT"):
+                        try:
+                            mc.publish(topic + "battery_mode",
+                                       battery_mode_for(RATED.get("float_v")), retain=True)
+                        except Exception:
+                            pass
+                print(time.strftime("%H:%M:%S"), "SET", _ascii, "->", _box["reply"])
             except Exception as _e:
                 _box["ok"], _box["reply"] = False, str(_e)
             finally:
@@ -977,6 +1048,30 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                          "ok": bool(box["ok"]), "reply": box.get("reply", "")}))
                     return
                 self._reply(200, "application/json", json.dumps({"battery_mode": cur, "float": fv}))
+                return
+
+            if p == "/settings/catalog":               # controllable settings + options, for the UI
+                self._reply(200, "application/json", json.dumps(catalog_json()))
+                return
+
+            if path.startswith("/set/"):               # write ONE setting: /set/<key>?value=<v>
+                key = path[len("/set/"):].strip("/")
+                value = next((kv[6:] for kv in query.split("&") if kv.startswith("value=")), None)
+                cmd = build_set_cmd(key, value)
+                if cmd is None:
+                    self._reply(400, "application/json", json.dumps(
+                        {"ok": False, "error": "unknown/invalid setting or value", "key": key}))
+                    return
+                with state_lock:
+                    cur_mode = state["mode"]
+                if cur_mode != "local":                # never touch the bus in mirror mode
+                    self._reply(409, "application/json", json.dumps(
+                        {"ok": False, "error": "settings write needs local mode", "mode": cur_mode}))
+                    return
+                box = queue_cmd(cmd)
+                self._reply(200, "application/json", json.dumps(
+                    {"ok": bool(box["ok"]), "reply": box.get("reply", ""), "key": key, "cmd": cmd,
+                     "value": RATED_ALL.get(key), "value_name": RATED_ALL.get(key + "_name")}))
                 return
 
             if path.startswith("/vm/"):
