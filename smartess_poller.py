@@ -196,7 +196,7 @@ QFLAG_NAMES = {
 # publish it to MQTT so it lands in VictoriaMetrics. Storing the *modelled* GTI
 # next to the *actual* PV lets us build real history and calibrate the forecast.
 # Runs in its own thread — it never touches the RS485 bus, so it works in any mode.
-WEATHER_INTERVAL = 600     # seconds between Open-Meteo polls (~10 min)
+WEATHER_INTERVAL = 300     # seconds between weather writes (~5 min; GTI interpolated from the 15-min source)
 _WEATHER_URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
                 "&current=cloud_cover,temperature_2m"
                 "&minutely_15=global_tilted_irradiance"
@@ -256,18 +256,29 @@ def fetch_weather_once(mc, topic):
     m = j.get("minutely_15") or {}
     times, gtis = m.get("time") or [], m.get("global_tilted_irradiance") or []
     now = time.time()
-    best_i, best_d = None, 1e18
-    for i, t in enumerate(times):
-        if i >= len(gtis) or gtis[i] is None:
-            continue
-        d = abs(calendar.timegm(time.strptime(t, "%Y-%m-%dT%H:%M")) - now)
-        if d < best_d:
-            best_d, best_i = d, i
-    if best_i is not None and best_d < 1800:           # within 30 min of a sample
-        gti = gtis[best_i]
-        out["gti"] = gti
+    # linearly interpolate the 15-min GTI to *now* (source is 15-min; this gives a
+    # smooth value so a 5-min write cadence produces a smooth curve, not a staircase)
+    epochs = [calendar.timegm(time.strptime(t, "%Y-%m-%dT%H:%M")) for t in times]
+    gti = None
+    if epochs and gtis:
+        if now <= epochs[0]:
+            gti = gtis[0]
+        elif now >= epochs[-1]:
+            gti = gtis[-1]
+        else:
+            for i in range(1, len(epochs)):
+                if epochs[i] >= now:
+                    a0, a1 = gtis[i - 1], gtis[i]
+                    if a0 is None or a1 is None:
+                        gti = a1 if a0 is None else a0
+                    else:
+                        f = (now - epochs[i - 1]) / ((epochs[i] - epochs[i - 1]) or 1)
+                        gti = a0 + (a1 - a0) * f
+                    break
+    if gti is not None:
+        out["gti"] = round(gti, 1)
         if kwp > 0:
-            out["pv_potential_w"] = round(kwp * gti * pv_derate(gti, out.get("temp")))
+            out["pv_potential_w"] = round(kwp * out["gti"] * pv_derate(out["gti"], out.get("temp")))
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
     return out
