@@ -556,34 +556,30 @@ function renderTable(c){ const p=c.p, rows=c.last||[];
   c.el.innerHTML=h; }
 function renderInfo(c){ const i=c.last||{}; c.el.innerHTML = (i.model||i.serial||i.firmware) ?
   `<b>Model</b> ${i.model||"—"} &nbsp;·&nbsp; <b>Serial</b> ${i.serial||"—"} &nbsp;·&nbsp; <b>Protocol</b> ${i.protocol||"—"} &nbsp;·&nbsp; <b>FW</b> ${i.firmware||"—"}` : "—"; }
+const CELL_LO=2.5, CELL_HI=3.65, CELL_FULL=3.6;       // LiFePO4 cell window: empty(0%) → max charge(100%)
 function renderCells(c){ const vals=c.last||[];
   const present=vals.map((v,i)=>({i,v})).filter(x=>x.v!=null&&isFinite(x.v));
   if(!present.length){ c.el.innerHTML='<span class="err" style="color:var(--muted)">— no BMS data</span>'; return; }
   const vs=present.map(x=>x.v), mn=Math.min(...vs), mx=Math.max(...vs);
-  const pad=Math.max((mx-mn)*0.18, 0.0006), lo=mn-pad, hi=mx+pad, span=hi-lo;   // shared min→max scale (padded so the extremes aren't at the very edge)
   let mnI=present[0].i, mxI=present[0].i; present.forEach(x=>{ if(x.v<vals[mnI])mnI=x.i; if(x.v>vals[mxI])mxI=x.i; });
   const avg=vs.reduce((a,b)=>a+b,0)/vs.length, delta=Math.round((mx-mn)*1000);
-  const pos=v=>Math.max(0,Math.min(100,(v-lo)/span*100));
+  const fill=v=>Math.max(0,Math.min(100,(v-CELL_LO)/(CELL_HI-CELL_LO)*100));
   const dcol=delta>=50?"#ef4444":delta>=25?"#f59e0b":"var(--good)";
-  // header: average + spread (colour-coded)
-  let h=`<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:.72rem;color:var(--muted);margin-bottom:7px">`+
+  // header: average + spread (spread just quantifies balance; bars use the absolute window)
+  let h=`<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:.72rem;color:var(--muted);margin-bottom:2px">`+
     `<span>avg <b style="color:var(--text)">${avg.toFixed(3)}</b> V</span>`+
     `<span>spread <b style="color:${dcol}">${delta}</b> mV</span></div>`;
-  // summary strip: the band that runs from min to max, with an avg tick
-  h+=`<div style="display:flex;justify-content:space-between;font-size:.66rem;margin-bottom:2px">`+
-     `<span style="color:#3b82f6">min C${mnI+1} ${mn.toFixed(3)}</span><span style="color:#ef4444">max C${mxI+1} ${mx.toFixed(3)}</span></div>`;
-  h+=`<div style="position:relative;height:10px;background:var(--grid);border-radius:5px;margin-bottom:10px">`+
-     `<span style="position:absolute;top:0;bottom:0;left:${pos(mn)}%;width:${Math.max(pos(mx)-pos(mn),1.5)}%;background:linear-gradient(90deg,#3b82f6,#22c55e,#ef4444);border-radius:5px"></span>`+
-     `<span style="position:absolute;top:-2px;bottom:-2px;left:${pos(avg)}%;width:2px;margin-left:-1px;background:var(--text);opacity:.65"></span></div>`;
-  // one dot per cell on that same scale — position shows where each sits between min and max
+  // fixed scale caption: the full possible cell window (empty → full)
+  h+=`<div style="display:flex;justify-content:space-between;font-size:.64rem;color:var(--muted);margin-bottom:6px">`+
+     `<span>${CELL_LO.toFixed(1)} V · empty</span><span>full · ${CELL_HI.toFixed(2)} V</span></div>`;
+  // each cell: bar filled to its voltage within empty→full; thin line marks "full" (3.6 V)
   h+=vals.map((v,i)=>{ if(v==null||!isFinite(v))return "";
-    const isMx=i===mxI,isMn=i===mnI, col=isMx?"#ef4444":isMn?"#3b82f6":resolveColor(C.pv), p=pos(v);
-    return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;font-size:.74rem">`+
+    const isMx=i===mxI,isMn=i===mnI, col=isMx?"#ef4444":isMn?"#3b82f6":resolveColor(C.pv), f=fill(v);
+    return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;font-size:.74rem">`+
       `<span style="width:20px;color:var(--muted);text-align:right">${i+1}</span>`+
-      `<span style="position:relative;flex:1;height:10px">`+
-        `<span style="position:absolute;top:4px;left:0;right:0;height:2px;background:var(--grid);border-radius:1px"></span>`+
-        `<span style="position:absolute;top:0;bottom:0;left:${pos(avg)}%;width:1px;background:var(--muted);opacity:.4"></span>`+
-        `<span style="position:absolute;top:0;left:${p}%;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:${col};box-shadow:0 0 0 2px var(--panel);transition:left .3s"></span>`+
+      `<span style="position:relative;flex:1;height:11px;background:var(--grid);border-radius:3px;overflow:hidden">`+
+        `<span style="display:block;height:100%;width:${f.toFixed(1)}%;background:${col};transition:width .3s"></span>`+
+        `<span style="position:absolute;top:0;bottom:0;left:${fill(CELL_FULL).toFixed(1)}%;width:1px;background:var(--muted);opacity:.55"></span>`+
       `</span>`+
       `<b style="width:48px;text-align:right;font-variant-numeric:tabular-nums;color:${isMx||isMn?col:'var(--text)'}">${v.toFixed(3)}</b></div>`; }).join("");
   c.el.innerHTML=h; }
