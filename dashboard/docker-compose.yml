@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
     command:
       - "-storageDataPath=/vmdata"
-      - "-retentionPeriod=24"          # keep 24 months of history
+      - "-retentionPeriod=48"          # keep 48 months — room for the 2024+ historical backfill
       - "-memory.allowedPercent=60"
     ports:
       - "127.0.0.1:8428:8428"          # exposed to host only, so host-networked Telegraf can write
