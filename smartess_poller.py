@@ -202,6 +202,22 @@ _WEATHER_URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s
                 "&minutely_15=global_tilted_irradiance"
                 "&tilt=%d&azimuth=%d&forecast_days=1&timezone=GMT")
 
+# PV system derate (PVWatts-style): a temperature-independent base (wiring, inverter,
+# soiling, mismatch) times a cell-temperature factor. Cell temp from the NOCT model.
+# Keep these in sync with the dashboard (pvDerate in web/index.html).
+PV_NOCT = 45.0           # nominal operating cell temperature (°C)
+PV_TEMP_COEFF = 0.004    # power loss per °C above 25 (crystalline Si ~0.4%/°C)
+PV_BASE_DERATE = 0.90    # non-temperature losses
+
+
+def pv_derate(gti, t_air):
+    """System derate incl. cell-temperature effect. Falls back to the base
+    derate when air temperature is unknown."""
+    if t_air is None:
+        return PV_BASE_DERATE
+    t_cell = t_air + (gti / 800.0) * (PV_NOCT - 20.0)
+    return max(0.5, min(1.05, PV_BASE_DERATE * (1.0 - PV_TEMP_COEFF * (t_cell - 25.0))))
+
 
 def _load_pv_geo():
     """PV location/geometry from the dashboard settings file: (lat, lon, kWp, tilt, az)."""
@@ -251,7 +267,7 @@ def fetch_weather_once(mc, topic):
         gti = gtis[best_i]
         out["gti"] = gti
         if kwp > 0:
-            out["pv_potential_w"] = round(kwp * gti * 0.82)   # array derate ~0.82
+            out["pv_potential_w"] = round(kwp * gti * pv_derate(gti, out.get("temp")))
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
     return out

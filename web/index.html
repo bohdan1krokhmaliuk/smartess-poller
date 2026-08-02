@@ -131,9 +131,15 @@ function solarElevAz(lat,lon,d){ const r=Math.PI/180,g=180/Math.PI;
   const el=Math.asin(Math.max(-1,Math.min(1,sinEl)))*g;
   const az=(Math.atan2(Math.sin(H*r),Math.cos(H*r)*Math.sin(lat*r)-Math.tan(dec*r)*Math.cos(lat*r))*g+540)%360;
   return {el,az}; }
+// PV system derate: base losses (wiring, inverter, soiling, mismatch) × a cell-temperature
+// factor (NOCT model). Mirrors pv_derate() in smartess_poller.py — keep the two in sync.
+const PV_NOCT=45, PV_TEMP_COEFF=0.004, PV_BASE_DERATE=0.90;
+function pvDerate(gti,tAir){ if(tAir==null)return PV_BASE_DERATE;
+  const tCell=tAir+(gti/800)*(PV_NOCT-20);
+  return Math.max(0.5,Math.min(1.05, PV_BASE_DERATE*(1-PV_TEMP_COEFF*(tCell-25)))); }
 function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
   const g=gtiAt(d.getTime());
-  if(g!=null) return Math.round(PVKWP*g*0.82);   // Open-Meteo tilted irradiance (W/m², clouds already modelled) × system derate 0.82
+  if(g!=null) return Math.round(PVKWP*g*pvDerate(g,tempAt(d.getTime())));   // tilted irradiance (clouds modelled) × temperature-aware derate
   const {el,az}=solarElevAz(PVLAT,PVLON,d); if(el<=2)return 0;   // fallback (offline): clear-sky geometry × cloud-cover factor
   const r=Math.PI/180, AM=1/Math.sin(el*r), DNI=1000*Math.pow(0.7,Math.pow(AM,0.678));
   const tilt=(PVTILT==null?30:PVTILT), paz=(PVAZ==null?180:PVAZ);
@@ -235,8 +241,8 @@ const SECTIONS=[
      {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
      {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
-   {t:"chart",pvhead:1,title:"Produced / available / unused (W)",unit:"W",span:9,series:[
-     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"unused",color:"var(--muted)"}]},
+   {t:"chart",pvhead:1,title:"Produced / available / expected (W)",unit:"W",span:9,series:[
+     {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"},{label:"expected",color:"#14b8a6"}]},
    {t:"sky",title:"Sun path & sky",span:3},
  ]},
  {name:"🔋 Battery", battmode:1, panels:[
@@ -313,7 +319,7 @@ const DESC={
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
  "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available for the whole day (forecast for the hours not yet passed); Appx unused today = the part you didn't use so far (est.); Cloud = current cloud cover.",
- "Produced / available / unused (W)":"Actual PV (green) vs weather-model available (blue) over time; the shaded gap is solar you could have used but didn't.",
+ "Produced / available / expected (W)":"Green (filled) = actual PV. Blue = weather-model ceiling (all the sun the array could catch). Teal = expected harvest = min(ceiling, load + battery charging) — the realistic limit given there has to be somewhere to put the power. Ceiling→expected gap = spare you couldn't use (battery full / low load); expected→produced gap = the rest (inverter throttles PV when the battery is full).",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
@@ -593,10 +599,11 @@ function renderGauge2(c){ const p=c.p, vals=c.last||[], subs=c.subv||[];   // tw
 let WEATHER=null;
 async function fetchWeather(){ if(PVLAT==null||PVLON==null){ WEATHER=null; return; }
   const tilt=Math.round(PVTILT==null?30:PVTILT), omaz=Math.round((PVAZ==null?180:PVAZ)-180);  // Open-Meteo azimuth: 0=S,+W
-  try{ const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${PVLAT}&longitude=${PVLON}&current=cloud_cover,temperature_2m&hourly=global_tilted_irradiance,cloud_cover&tilt=${tilt}&azimuth=${omaz}&past_days=2&forecast_days=1&timezone=GMT`);
+  try{ const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${PVLAT}&longitude=${PVLON}&current=cloud_cover,temperature_2m&hourly=global_tilted_irradiance,cloud_cover,temperature_2m&tilt=${tilt}&azimuth=${omaz}&past_days=2&forecast_days=1&timezone=GMT`);
     const j=await r.json(); const w=j.current?{cloud:j.current.cloud_cover,temp:j.current.temperature_2m}:{};
     if(j.hourly&&j.hourly.time){ w.gti=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.global_tilted_irradiance[i]]).filter(p=>p[1]!=null);
-      w.cloudH=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.cloud_cover[i]]); }
+      w.cloudH=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.cloud_cover[i]]);
+      w.tempH=j.hourly.time.map((t,i)=>[Date.parse(t+"Z"),j.hourly.temperature_2m[i]]); }
     WEATHER=w; }catch(e){} }
 function gtiAt(ms){ if(!WEATHER||!WEATHER.gti||!WEATHER.gti.length)return null; const h=WEATHER.gti;
   if(ms<h[0][0]||ms>h[h.length-1][0]){ let b=null,bd=1e15; for(const[t,v]of h){const d=Math.abs(t-ms);if(d<bd){bd=d;b=v;}} return bd<5400000?b:null; }
@@ -604,6 +611,9 @@ function gtiAt(ms){ if(!WEATHER||!WEATHER.gti||!WEATHER.gti.length)return null; 
 function cloudFactor(c){ if(c==null)return 1; const N=Math.max(0,Math.min(1,c/100)); return 1-0.75*Math.pow(N,3.4); }
 function cloudAt(ms){ if(!WEATHER)return null; const h=WEATHER.cloudH; if(!h||!h.length)return WEATHER.cloud;
   let b=null,bd=1e15; for(const[t,c]of h){const d=Math.abs(t-ms);if(d<bd){bd=d;b=c;}} return bd<5400000?b:WEATHER.cloud; }
+function tempAt(ms){ if(!WEATHER)return null; const h=WEATHER.tempH; const cur=WEATHER.temp==null?null:WEATHER.temp; if(!h||!h.length)return cur;
+  if(ms<h[0][0]||ms>h[h.length-1][0]){ let b=null,bd=1e15; for(const[t,v]of h){const d=Math.abs(t-ms);if(v!=null&&d<bd){bd=d;b=v;}} return bd<5400000?b:cur; }
+  for(let i=1;i<h.length;i++){ if(h[i][0]>=ms){ const[t0,v0]=h[i-1],[t1,v1]=h[i]; if(v0==null||v1==null)return v0==null?v1:v0; return v0+(v1-v0)*(ms-t0)/(t1-t0||1); } } return cur; }
 
 // client-computed values (not from VM): PV headroom vs clear-sky potential
 const CLIENT={
@@ -649,9 +659,15 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else if(p.pvhead){ const pv=await qRange(`${AGG}_over_time((${M.pvpow})[${st}s])`,from,to,st); const conf=pvPotentialW()!=null; const avail=[],unused=[];
-        for(const [t,v] of pv){ const a=conf?pvPotentialAt(new Date(t)):null; if(a!=null){ avail.push([t,a]); unused.push([t,Math.max(0,a-v)]); } }
-        c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:unused,fill:1}]); }
+      else if(p.pvhead){ const conf=pvPotentialW()!=null;
+        const [pv,load,chg]=await Promise.all([
+          qRange(`${AGG}_over_time((${M.pvpow})[${st}s])`,from,to,st),
+          conf?qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${st}s])`,from,to,st):Promise.resolve([]),
+          conf?qRange(`${AGG}_over_time((inverter_battery_voltage*inverter_battery_charge_current)[${st}s])`,from,to,st):Promise.resolve([]) ]);
+        const loadM=new Map(load.map(p=>[p[0],p[1]])), chgM=new Map(chg.map(p=>[p[0],p[1]])); const avail=[],expected=[];
+        for(const [t,v] of pv){ const a=conf?pvPotentialAt(new Date(t)):null; if(a!=null){ avail.push([t,a]);   // expected harvest = ceiling capped by where the power can actually go (load + battery charging)
+          const sink=(loadM.get(t)||0)+Math.max(0,chgM.get(t)||0); expected.push([t,Math.min(a,sink)]); } }
+        c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail},{...p.series[2],pts:expected}]); }
       else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // client-computed weather-model available solar
         const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${st}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
