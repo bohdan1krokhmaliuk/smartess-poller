@@ -668,17 +668,19 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000)`:``); const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else if(p.pvhead){ const conf=pvPotentialW()!=null;
-        const [pv,load,chg]=await Promise.all([
+      else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // historical: real potential from the DB (hourly weather); recent: client model (forecast-aware)
+        const [pv,load,chg,availVM]=await Promise.all([
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
           conf?qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st):Promise.resolve([]),
-          conf?qRange(`${AGG}_over_time((inverter_battery_voltage*inverter_battery_charge_current)[${aw}s])`,from,to,st):Promise.resolve([]) ]);
-        const loadM=new Map(load.map(p=>[p[0],p[1]])), chgM=new Map(chg.map(p=>[p[0],p[1]])); const avail=[],expected=[]; let lastL=null,lastC=null;
-        for(const [t,v] of pv){ const a=conf?pvPotentialAt(new Date(t)):null; if(a!=null){ avail.push([t,a]);   // expected harvest = ceiling capped by where the power can actually go (load + battery charging)
+          conf?qRange(`${AGG}_over_time((inverter_battery_voltage*inverter_battery_charge_current)[${aw}s])`,from,to,st):Promise.resolve([]),
+          histView?qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st):Promise.resolve(null) ]);
+        const loadM=new Map(load.map(p=>[p[0],p[1]])), chgM=new Map(chg.map(p=>[p[0],p[1]])), availM=availVM?new Map(availVM.map(p=>[p[0],p[1]])):null; const avail=[],expected=[]; let lastL=null,lastC=null;
+        for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null); if(a!=null){ avail.push([t,a]);   // expected harvest = ceiling capped by where the power can actually go (load + battery charging)
           const l=loadM.get(t),c=chgM.get(t); if(l!=null)lastL=l; if(c!=null)lastC=c;   // carry forward: load is sparser than pv on 5-min history, so hold last value instead of dropping the sink to 0
           const sink=(lastL||0)+Math.max(0,lastC||0); expected.push([t,Math.min(a,sink)]); } }
         c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail},{...p.series[2],pts:expected}]); }
-      else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // client-computed weather-model available solar
+      else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ if(histView) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // historical: real potential from the DB (backfilled weather)
+        const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // recent: client weather-model available solar
         const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${aw}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
