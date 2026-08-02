@@ -13,6 +13,8 @@ captures/
 # runtime state
 .energy_state.json
 .energy_state.json.tmp
+.rated_state.json
+.rated_history.jsonl
 
 # python
 __pycache__/

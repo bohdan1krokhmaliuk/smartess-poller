@@ -26,6 +26,7 @@ Reads config.ini next to this file if present; otherwise uses the defaults below
 Environment variables (SMARTESS_*) override both. No code editing required.
 """
 
+import calendar
 import configparser
 import http.server
 import json
@@ -104,6 +105,7 @@ QMN   = bytes.fromhex("ff04514d4ebb640d")       # model name (static)
 QPI   = bytes.fromhex("ff04515049beac0d")       # protocol id (static)
 QVFW  = bytes.fromhex("ff045156465762990d")     # main CPU firmware (static)
 QVFW3 = bytes.fromhex("ff045156465733d3d40d")   # secondary firmware (static)
+QFLAG = bytes.fromhex("ff0451464c414798740d")   # device on/off feature flags
 
 # ---- battery float-voltage presets (Eco/Backup dashboard toggle) ----------
 # Two safe presets for the 16S LiFePO4 pack. The dashboard toggle writes one of
@@ -179,6 +181,166 @@ MODE_NAMES = {
     "F": "Fault", "H": "PowerSaving", "D": "Shutdown", "Y": "Bypass",
 }
 MODE_CODES = {"P": 0, "S": 1, "L": 2, "B": 3, "F": 4, "H": 5, "D": 6, "Y": 7}
+
+# QFLAG device feature flags (PI30). Reply is "(E<enabled letters>D<disabled letters>".
+# Each letter is a toggleable function; we surface them as flag_<name> = 1/0.
+QFLAG_NAMES = {
+    "a": "silence_buzzer", "b": "overload_bypass", "j": "power_saving",
+    "k": "lcd_home_timeout", "u": "overload_restart", "v": "overtemp_restart",
+    "x": "backlight", "y": "alarm_on_source_interrupt", "z": "fault_record",
+}
+
+
+# --------------------------------------------------------------- weather (solar)
+# Fetch tilted-plane irradiance for the array from Open-Meteo (free, no key) and
+# publish it to MQTT so it lands in VictoriaMetrics. Storing the *modelled* GTI
+# next to the *actual* PV lets us build real history and calibrate the forecast.
+# Runs in its own thread — it never touches the RS485 bus, so it works in any mode.
+WEATHER_INTERVAL = 600     # seconds between Open-Meteo polls (~10 min)
+_WEATHER_URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
+                "&current=cloud_cover,temperature_2m"
+                "&minutely_15=global_tilted_irradiance"
+                "&tilt=%d&azimuth=%d&forecast_days=1&timezone=GMT")
+
+
+def _load_pv_geo():
+    """PV location/geometry from the dashboard settings file: (lat, lon, kWp, tilt, az)."""
+    try:
+        with open(SETTINGS_FILE) as f:
+            s = json.load(f)
+        lat = float(s["pvlat"]); lon = float(s["pvlon"])
+    except Exception:
+        return None
+
+    def num(key, default):
+        v = s.get(key)
+        try:
+            return float(v) if v not in (None, "") else default
+        except (TypeError, ValueError):
+            return default
+
+    return lat, lon, num("pvkwp", 0.0), num("pvtilt", 30.0), num("pvaz", 180.0)
+
+
+def fetch_weather_once(mc, topic):
+    """Pull current cloud/temp + 15-min tilted irradiance, publish weather_json."""
+    geo = _load_pv_geo()
+    if not geo:
+        return None
+    lat, lon, kwp, tilt, az = geo
+    url = _WEATHER_URL % (lat, lon, round(tilt), round(az - 180))   # Open-Meteo az: 0=S,+W
+    with urllib.request.urlopen(url, timeout=20) as r:
+        j = json.loads(r.read().decode("utf-8"))
+    cur = j.get("current") or {}
+    out = {}
+    if cur.get("cloud_cover") is not None:
+        out["cloud"] = cur["cloud_cover"]
+    if cur.get("temperature_2m") is not None:
+        out["temp"] = cur["temperature_2m"]
+    m = j.get("minutely_15") or {}
+    times, gtis = m.get("time") or [], m.get("global_tilted_irradiance") or []
+    now = time.time()
+    best_i, best_d = None, 1e18
+    for i, t in enumerate(times):
+        if i >= len(gtis) or gtis[i] is None:
+            continue
+        d = abs(calendar.timegm(time.strptime(t, "%Y-%m-%dT%H:%M")) - now)
+        if d < best_d:
+            best_d, best_i = d, i
+    if best_i is not None and best_d < 1800:           # within 30 min of a sample
+        gti = gtis[best_i]
+        out["gti"] = gti
+        if kwp > 0:
+            out["pv_potential_w"] = round(kwp * gti * 0.82)   # array derate ~0.82
+    if out:
+        mc.publish(topic + "weather_json", json.dumps(out), retain=True)
+    return out
+
+
+def weather_loop(mc, topic):
+    while True:
+        try:
+            fetch_weather_once(mc, topic)
+        except Exception as e:
+            print(time.strftime("%H:%M:%S"), "weather fetch failed:", e)
+        time.sleep(WEATHER_INTERVAL)
+
+
+# ------------------------------------------------------- settings change-history
+# Inverter settings (QPIRI + QFLAG) change rarely, so we log only *changes*: an
+# append-only JSONL audit trail (old -> new) plus a retained rated_json snapshot
+# so VictoriaMetrics keeps sparse change-points. State is persisted across
+# restarts so a poller restart alone doesn't fabricate a "change".
+RATED_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".rated_history.jsonl")
+RATED_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".rated_state.json")
+_rated_state = {}
+_rated_lock = threading.Lock()
+
+
+def _load_rated_state():
+    global _rated_state
+    try:
+        with open(RATED_STATE_FILE) as f:
+            _rated_state = json.load(f)
+    except Exception:
+        _rated_state = {}
+
+
+def note_rated_changes(mc, topic, updates, names=None):
+    """Merge a partial {key: value} settings update into the running snapshot.
+    On any real change (or a first-seen value), append a JSONL event and publish
+    the full numeric snapshot to rated_json. `names` maps key -> readable value."""
+    names = names or {}
+    with _rated_lock:
+        changes = []
+        for k, v in updates.items():
+            old = _rated_state.get(k)
+            if old != v:
+                changes.append({"key": k, "old": old, "new": v, "label": names.get(k)})
+                _rated_state[k] = v
+        if not changes:
+            return
+        event = {"ts": int(time.time()),
+                 "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                 "changes": changes}
+        try:
+            with open(RATED_HISTORY_FILE, "a") as f:
+                f.write(json.dumps(event) + "\n")
+            with open(RATED_STATE_FILE, "w") as f:
+                json.dump(_rated_state, f)
+        except Exception as e:
+            print(time.strftime("%H:%M:%S"), "rated history write failed:", e)
+        snapshot = {k: v for k, v in _rated_state.items() if isinstance(v, (int, float))}
+        mc.publish(topic + "rated_json", json.dumps(snapshot), retain=True)
+        for c in changes:
+            print(time.strftime("%H:%M:%S"), "setting changed:",
+                  c["key"], c["old"], "->", c["new"])
+
+
+def parse_qflag(text):
+    """Parse a QFLAG body ('E<enabled letters>D<disabled letters>') -> {flag_<name>: 1/0}."""
+    if not text or text[0] not in "ED":
+        return {}
+    out, enabled = {}, True
+    for ch in text:
+        if ch == "E":
+            enabled = True
+        elif ch == "D":
+            enabled = False
+        elif ch in QFLAG_NAMES:
+            out["flag_" + QFLAG_NAMES[ch]] = 1 if enabled else 0
+    return out
+
+
+def publish_qflag(mc, topic, text):
+    """Publish device feature flags and feed them into the settings change-log."""
+    flags = parse_qflag(text)
+    if not flags:
+        return
+    for k, v in flags.items():
+        mc.publish(topic + "rated/" + k, v, retain=True)
+    RATED_ALL.update(flags)
+    note_rated_changes(mc, topic, flags)
 
 
 def publish_mode(mc, topic, letter):
@@ -465,6 +627,10 @@ def publish_qpiri(mc, topic, text):
             snap[name + "_name"] = QPIRI_ENUMS[name].get(str(vals[name]), vals[name])
     RATED_ALL.clear()
     RATED_ALL.update(snap)
+    # settings change-history: numeric fields, with readable names for enums
+    numeric = {k: v for k, v in vals.items() if isinstance(v, (int, float))}
+    enum_labels = {k: QPIRI_ENUMS[k].get(str(vals[k])) for k in QPIRI_ENUMS if k in vals}
+    note_rated_changes(mc, topic, numeric, names=enum_labels)
     mc.publish(topic + "rated_info", text, retain=True)
 
 
@@ -562,6 +728,10 @@ def handle_fakeclient(sock, mc, cfg):
             dispatch_reply(mc, topic, word, request(sock, reader, cmd))
         except Exception:
             pass
+    try:
+        publish_qflag(mc, topic, voltronic_text(request(sock, reader, QFLAG)))
+    except Exception:
+        pass
 
     last_keepalive = time.time()
     last_energy = 0.0
@@ -608,9 +778,14 @@ def handle_fakeclient(sock, mc, cfg):
                 publish_qet(mc, topic, energy)
             last_energy = time.time()
 
-        # settings (QPIRI) change rarely; refresh every few minutes for the config page
+        # settings (QPIRI + QFLAG) change rarely; refresh every few minutes for the
+        # config page and log any change to the audit trail
         if time.time() - last_rated > 300:
             dispatch_reply(mc, topic, "QPIRI", request(sock, reader, QPIRI))
+            try:
+                publish_qflag(mc, topic, voltronic_text(request(sock, reader, QFLAG)))
+            except Exception:
+                pass
             last_rated = time.time()
 
         if time.time() - last_keepalive > 30:
@@ -800,6 +975,15 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 self._reply(200, "application/json", json.dumps(RATED_ALL))
                 return
 
+            if path == "/rated/history":               # settings change-log (JSONL -> array)
+                try:
+                    with open(RATED_HISTORY_FILE) as f:
+                        events = [json.loads(ln) for ln in f if ln.strip()][-200:]
+                except Exception:
+                    events = []
+                self._reply(200, "application/json", json.dumps(events))
+                return
+
             if path in ("/inverter", "/inverter.html"):
                 try:
                     with open(os.path.join(web_dir, "inverter.html"), "rb") as f:
@@ -906,6 +1090,9 @@ def main():
 
     if cfg["control_port"]:
         start_control_server(cfg["control_port"], state, state_lock, set_mode, mc, topic)
+
+    _load_rated_state()          # so a restart alone doesn't re-log unchanged settings
+    threading.Thread(target=weather_loop, args=(mc, topic), daemon=True).start()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
