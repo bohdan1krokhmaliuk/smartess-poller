@@ -662,7 +662,8 @@ function renderSky(c){ const el=c.el;
   el.innerHTML=s; }
 
 async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
-  const aw=(to<now-2*86400000)?Math.max(st,360):st;   // historical (>2 days, ~5-min cloud data): aggregate over >=6 min so every step point catches a sample -> lines stay visible even when zoomed in; live data uses st unchanged
+  const histView=to<now-2*86400000;   // whole visible window older than ~2 days -> historical (~5-min cloud data + backfilled weather)
+  const aw=histView?Math.max(st,360):st;   // aggregate over >=6 min so every step point catches a sample -> lines stay visible when zoomed in; live data uses st unchanged
   { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
   await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
