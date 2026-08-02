@@ -250,6 +250,7 @@ const SECTIONS=[
    {t:"chart",pvhead:1,title:"Produced / available (W)",unit:"W",span:9,series:[
      {label:"produced",color:C.pv},{label:"available",color:"#3b82f6"}]},
    {t:"sky",title:"Sun path & sky",span:3},
+   {t:"chart",title:"Irradiance — GTI (W/m²)",unit:"W/m²",span:12,series:[{expr:"weather_gti",label:"GTI on the array plane",color:"#f59e0b",wx:1}]},
  ]},
  {name:"🔋 Battery", battmode:1, panels:[
    {t:"multi",title:"Charging now",span:6,items:[
@@ -678,7 +679,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
         c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail}]); }
       else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ if(histView) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // historical: real potential from the DB (backfilled weather)
         const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // recent: client weather-model available solar
-        const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${aw}s])`,from,to,st)}; })); c.chart.setData(series); }
+        const ag=s.agg||p.agg||AGG; const w2=s.wx?Math.max(st,3900):aw; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${w2}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
     else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?(p.now?now:evalT):now))); renderMulti(c); }
