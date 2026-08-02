@@ -174,12 +174,14 @@ const M={
   pf:"inverter_ac_output_active_power / inverter_ac_output_apparent_power", mode:"mode_value", fault:"fault_value", pvtot:"energy_value",
   avg1h:"avg_over_time(inverter_ac_output_active_power[1h])", avg24h:"avg_over_time(inverter_ac_output_active_power[24h])",
 };
+// energy over a window: lifetime-counter delta (live) OR integral of power (historical backfill, where the counters don't exist). kWh either way.
+const eFromP=(c,p,w)=>`(max_over_time(${c}[${w}s]) - min_over_time(${c}[${w}s])) or (avg_over_time((${p})[${w}s]) * ${w}/3600000)`;
 const dv={
-  cons:w=>`max_over_time(energymeter_consumed_total[${w}s]) - min_over_time(energymeter_consumed_total[${w}s])`,
-  pv:w=>`max_over_time(energymeter_pv_total[${w}s]) - min_over_time(energymeter_pv_total[${w}s])`,
-  bat:w=>`max_over_time(energymeter_battery_out_total[${w}s]) - min_over_time(energymeter_battery_out_total[${w}s])`,
-  grid:w=>`max_over_time(energymeter_grid_total[${w}s]) - min_over_time(energymeter_grid_total[${w}s])`,
-  self:w=>`clamp_max(100*(max_over_time(energymeter_pv_total[${w}s])-min_over_time(energymeter_pv_total[${w}s]))/(max_over_time(energymeter_consumed_total[${w}s])-min_over_time(energymeter_consumed_total[${w}s])),100)`,
+  cons:w=>eFromP("energymeter_consumed_total","inverter_ac_output_active_power",w),
+  pv:w=>eFromP("energymeter_pv_total","inverter_pv_input_voltage*inverter_pv_input_current",w),
+  bat:w=>eFromP("energymeter_battery_out_total","inverter_battery_voltage*inverter_battery_discharge_current",w),
+  grid:w=>eFromP("energymeter_grid_total",M.grid,w),
+  self:w=>`clamp_max(100*(${eFromP("energymeter_pv_total","inverter_pv_input_voltage*inverter_pv_input_current",w)})/(${eFromP("energymeter_consumed_total","inverter_ac_output_active_power",w)}),100)`,
   peakLoad:w=>`max_over_time(inverter_ac_output_active_power[${w}s])`,
   pvPeak:w=>`max_over_time((inverter_pv_input_voltage*inverter_pv_input_current)[${w}s:2m])`,
   minSoc:w=>`min_over_time(inverter_battery_capacity[${w}s])`,
@@ -210,12 +212,12 @@ const SECTIONS=[
      {label:"Mode",expr:M.mode,live:1,map:MODE_MAP},
      {label:"Health",expr:M.fault,live:1,map:FAULT_MAP},
      {label:"Heatsink",expr:M.temp,live:1,unit:"°C",th:[[0,"var(--good)"],[55,"var(--warn)"],[70,"var(--bad)"]]}]},
-   {t:"table",title:"Sources",span:6,note:"Values are live; the energy column is today's total. Grid current is inferred (W ÷ V).",cols:["","V","A","W","today"],rows:[
+   {t:"table",title:"Sources",span:6,now:1,note:"Values are live; the energy column is today's total. Grid current is inferred (W ÷ V).",cols:["","V","A","W","today"],rows:[
      {label:"PV",color:C.pv,cells:[{expr:M.pvV,unit:"V",dec:1},{expr:M.pvA,unit:"A",dec:1},{expr:M.pvpow,unit:"W"},{dyn:dtoday.pv,unit:"eauto"}]},
      {label:"Battery",color:C.bat,cells:[{expr:M.batV,unit:"V",dec:2},{expr:"inverter_battery_charge_current - inverter_battery_discharge_current",unit:"A",dec:1},{expr:M.netbat,unit:"W"},{dyn:dtoday.bat,unit:"eauto"}]},
      {label:"Grid",color:C.grid,cells:[{expr:M.gridV,unit:"V",dec:1},{expr:`(${M.grid})/inverter_grid_voltage`,unit:"A",dec:1},{expr:M.grid,unit:"W"},{dyn:dtoday.grid,unit:"eauto"}]},
      {label:"Output",color:"var(--text)",cells:[{expr:M.outV,unit:"V",dec:1},{expr:"inverter_ac_output_active_power/inverter_ac_output_voltage",unit:"A",dec:1},{expr:M.load,unit:"W"},{dyn:dtoday.cons,unit:"eauto"}]}]},
-   {t:"multi",title:"Cost today",span:3,items:[
+   {t:"multi",title:"Cost today",span:3,now:1,items:[
      {label:"Total",dyn:()=>`(${dtoday.cons()})*${TARIFF}`,unit:"money",dec:2,color:"var(--text)"},
      {label:"☀ Solar saved",dyn:()=>`clamp_min((${dtoday.cons()})-(${dtoday.grid()}),0)*${TARIFF}`,unit:"money",dec:2,color:C.pv},
      {label:"⚡ Grid",dyn:()=>`(${dtoday.grid()})*${TARIFF}`,unit:"money",dec:2,color:C.grid}]},
@@ -282,8 +284,8 @@ const SECTIONS=[
  ]},
  {name:"📈 History & state", panels:[
    {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
-     {counter:"energymeter_pv_total",label:"generated",color:C.pv},
-     {counter:"energymeter_consumed_total",label:"consumed",color:C.cons}]},
+     {counter:"energymeter_pv_total",power:"inverter_pv_input_voltage*inverter_pv_input_current",label:"generated",color:C.pv},
+     {counter:"energymeter_consumed_total",power:"inverter_ac_output_active_power",label:"consumed",color:C.cons}]},
    {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
  ]},
  {name:"🔗 Grid & output", panels:[
@@ -297,8 +299,8 @@ const SECTIONS=[
      {label:"Grid",dyn:dv.gridCost,unit:"money",dec:2,color:C.grid},
      {label:"Solar saved",dyn:dv.savings,unit:"money",dec:2,color:C.pv}]},
    {t:"chart",kind:"bars",title:"Cost over time",unit:"money",span:8,series:[
-     {counter:"energymeter_consumed_total",label:"total",color:C.cons,cost:1},
-     {counter:"energymeter_grid_total",label:"grid",color:C.grid,cost:1}]},
+     {counter:"energymeter_consumed_total",power:"inverter_ac_output_active_power",label:"total",color:C.cons,cost:1},
+     {counter:"energymeter_grid_total",power:M.grid,label:"grid",color:C.grid,cost:1}]},
  ]},
  {name:"🔎 Power quality", panels:[
    {t:"stat",title:"Power factor now",expr:M.pf,live:1,unit:"",dec:2,span:3,th:[[0,"var(--bad)"],[0.7,"var(--warn)"],[0.9,"var(--good)"]]},
@@ -660,26 +662,28 @@ function renderSky(c){ const el=c.el;
   el.innerHTML=s; }
 
 async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
+  const aw=(to<now-2*86400000)?Math.max(st,360):st;   // historical (>2 days, ~5-min cloud data): aggregate over >=6 min so every step point catches a sample -> lines stay visible even when zoomed in; live data uses st unchanged
   { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
   await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
-        const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
+        const series=await Promise.all(p.series.map(async s=>{ const base=`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000)`:``); const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
       else if(p.pvhead){ const conf=pvPotentialW()!=null;
         const [pv,load,chg]=await Promise.all([
-          qRange(`${AGG}_over_time((${M.pvpow})[${st}s])`,from,to,st),
-          conf?qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${st}s])`,from,to,st):Promise.resolve([]),
-          conf?qRange(`${AGG}_over_time((inverter_battery_voltage*inverter_battery_charge_current)[${st}s])`,from,to,st):Promise.resolve([]) ]);
-        const loadM=new Map(load.map(p=>[p[0],p[1]])), chgM=new Map(chg.map(p=>[p[0],p[1]])); const avail=[],expected=[];
+          qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
+          conf?qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st):Promise.resolve([]),
+          conf?qRange(`${AGG}_over_time((inverter_battery_voltage*inverter_battery_charge_current)[${aw}s])`,from,to,st):Promise.resolve([]) ]);
+        const loadM=new Map(load.map(p=>[p[0],p[1]])), chgM=new Map(chg.map(p=>[p[0],p[1]])); const avail=[],expected=[]; let lastL=null,lastC=null;
         for(const [t,v] of pv){ const a=conf?pvPotentialAt(new Date(t)):null; if(a!=null){ avail.push([t,a]);   // expected harvest = ceiling capped by where the power can actually go (load + battery charging)
-          const sink=(loadM.get(t)||0)+Math.max(0,chgM.get(t)||0); expected.push([t,Math.min(a,sink)]); } }
+          const l=loadM.get(t),c=chgM.get(t); if(l!=null)lastL=l; if(c!=null)lastC=c;   // carry forward: load is sparser than pv on 5-min history, so hold last value instead of dropping the sink to 0
+          const sink=(lastL||0)+Math.max(0,lastC||0); expected.push([t,Math.min(a,sink)]); } }
         c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail},{...p.series[2],pts:expected}]); }
       else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // client-computed weather-model available solar
-        const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${st}s])`,from,to,st)}; })); c.chart.setData(series); }
+        const ag=s.agg||p.agg||AGG; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${aw}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
-    else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?evalT:now))); renderMulti(c); }
-    else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?evalT:now))))); renderTable(c); }
+    else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?(p.now?now:evalT):now))); renderMulti(c); }
+    else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?(p.now?now:evalT):now))))); renderTable(c); }
     else if(p.t==="cells"){ c.last=await Promise.all(Array.from({length:p.n},(_,i)=>qInstant(p.prefix+(i+1),now))); renderCells(c); }
     else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.optional)c.card.style.display=(c.last==null?"none":""); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
     else if(p.t==="gauge2"){ c.last=await Promise.all(p.gauges.map(g=>qInstant(g.expr,now))); c.subv=await Promise.all(p.gauges.map(g=>g.sub?qInstant(g.sub.expr,now):null)); renderGauge2(c); }
