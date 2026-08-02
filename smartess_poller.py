@@ -110,7 +110,7 @@ QVFW3 = bytes.fromhex("ff045156465733d3d40d")   # secondary firmware (static)
 # these to the inverter's FLOAT voltage (PI30 PBFT): Eco keeps the pack ~80% for
 # longevity when the grid is stable; Backup tops it to ~95% before outages.
 # Requires "local" mode (we own the RS485 bus); a no-op in "mirror".
-BATT_PRESETS = {"eco": 54.2, "backup": 55.0}
+BATT_PRESETS = {"eco": 54.2, "backup": 55.6}
 _batt_q = queue.Queue()          # (volts, Event, result_box); drained by the local poll loop
 
 

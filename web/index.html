@@ -514,7 +514,7 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
     tg.title="Connect / disconnect the BMS over Bluetooth (disconnect to use the JK phone app; also auto-off when the inverter is offline)";
     tg.addEventListener("click",ev=>{ ev.stopPropagation(); const on=tg.dataset.on==="1"; fetch("/bms/"+(on?"off":"on")).catch(()=>{}); tg.textContent="⏳ BMS"; }); head.append(tg); }
   if(sec.battmode){ const bt=document.createElement("span"); bt.id="battModeToggle"; bt.textContent="🔋 …"; bt.style.cssText="margin-left:auto;font-size:.66rem;padding:2px 8px;border:1px solid var(--grid);border-radius:10px;cursor:pointer;color:var(--muted);text-transform:none;letter-spacing:0";
-    bt.title="Charge target: Eco 80% (float 54.2 V) when the grid is stable · Backup 95% (float 55.0 V) before outages. Writes the inverter float voltage — needs local mode.";
+    bt.title="Charge target: Eco 80% (float 54.2 V) when the grid is stable · Backup 95% (float 55.6 V) before outages. Writes the inverter float voltage — needs local mode.";
     bt.addEventListener("click",async ev=>{ ev.stopPropagation(); if(bt.textContent==="⏳")return; const backup=bt.dataset.mode==="backup"; bt.textContent="⏳"; try{ const j=await (await fetch("/battery/"+(backup?"eco":"backup"))).json(); applyBattMode(j.battery_mode); if(j.ok===false) alert("Не вдалося встановити float: "+(j.reply||j.error||"?")); }catch(e){ applyBattMode(null); } }); head.append(bt); }
   main.append(head);
   const grid=document.createElement("div");grid.className="grid";main.append(grid);
