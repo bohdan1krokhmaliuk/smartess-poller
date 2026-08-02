@@ -480,7 +480,7 @@ class Chart{
     x.save();x.beginPath();x.rect(g.pl,g.pt,w-g.pl-g.pr,h-g.pt-g.pb);x.clip();   // keep bars/lines inside the plot (off the axis labels)
     if(this.p.kind==="bars"){ const n=this.series.length,bms=this.bucketMs||864e5,bw=Math.max(2,(X(from+bms)-X(from))*0.72/n);
       this.series.forEach((s,si)=>{ x.fillStyle=resolveColor(s.color); s.pts.forEach(p=>{ const cx=X(p[0])+(si-(n-1)/2)*bw,y=YL(p[1]); x.fillRect(cx-bw/2, Math.min(y,base), bw, Math.abs(base-y)); }); }); x.restore(); this._X=X; this.drawOv(); return; }
-    const gap=this.stepMs*2.5;
+    const gap=Math.max(this.stepMs*2.5, 10*60000);   // connect points up to ~10 min apart (historical cloud data is ~5-7 min); only longer gaps (inverter off) stay broken
     this.series.forEach(s=>{ if(!s.pts.length)return; const Y=s.axis==="right"?YR:YL,col=resolveColor(s.color);
       segs(s.pts,gap).forEach(seg=>{ if(s.fill&&seg.length>1){ x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.lineTo(X(seg[seg.length-1][0]),base);x.lineTo(X(seg[0][0]),base);x.closePath();x.fillStyle=hexA(col,.16);x.fill(); }
         x.lineJoin="round";x.lineCap="round";x.lineWidth=s.width||1.4;
