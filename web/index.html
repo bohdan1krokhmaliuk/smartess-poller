@@ -92,9 +92,13 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
     <button data-dur="604800">7d</button><button data-dur="2592000">30d</button>
     <button data-dur="31536000">1y</button><button data-today="1">Today</button>
   </div>
-  <span class="rel"><button class="iconbtn" id="customBtn" title="Custom range">📅</button>
+  <span class="rel"><button class="iconbtn" id="customBtn" title="Pick a date range">📅</button>
     <div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom">
       <label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div></span>
+  <div class="seg" id="shiftSel" title="Shift the visible window (keeps the same zoom)">
+    <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button>
+    <button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
+  </div>
   <div class="seg" id="refreshSel">
     <button data-ms="0">⏸</button><button data-ms="10000">10s</button>
     <button data-ms="30000" class="on">30s</button><button data-ms="60000">1m</button>
@@ -693,14 +697,17 @@ function markPreset(el){ document.querySelectorAll("#presets button").forEach(b=
 function setPreset(dur){ state.kind="preset"; state.dur=dur; state.abs=null; state.custom=false; markPreset([...document.querySelectorAll("#presets button")].find(b=>+b.dataset.dur*1000===dur)); updateCustomBtn(); refresh(); }
 function setToday(){ state.kind="today"; state.abs=null; state.custom=false; markPreset(document.querySelector('#presets [data-today]')); updateCustomBtn(); refresh(); }
 function setAbs(from,to){ state.kind="abs"; state.abs={from,to}; state.custom=true; markPreset(null); updateCustomBtn(); refresh(); }
+function addCal(ms,unit,n){ const d=new Date(ms); if(unit==="d")d.setDate(d.getDate()+n); else if(unit==="M")d.setMonth(d.getMonth()+n); else if(unit==="y")d.setFullYear(d.getFullYear()+n); return d.getTime(); }
+function shiftRange(unit,n){ const r=range(); let nf=addCal(r.from,unit,n),nt=addCal(r.to,unit,n); const now=Date.now(); if(nt>now){ const w=nt-nf; nt=now; nf=now-w; } setAbs(nf,nt); }   // shift the window by day/month/year, keep its width, never past now
 function isLive(){ return state.kind==="preset" || state.kind==="today" || (state.abs && state.abs.to>=Date.now()); }   // presets & today always live; custom range live only while it includes now
 function tick(){ if(isLive()) refresh(); }   // auto-refresh skips static (past) custom ranges
-function updateCustomBtn(){ const b=document.getElementById("customBtn"); b.textContent=state.custom?"↺":"📅"; b.title=state.custom?"Back to live (6h)":"Custom range"; }
+function updateCustomBtn(){ const b=document.getElementById("customBtn"); b.textContent="📅"; b.title="Pick a date range"; }
 document.querySelectorAll("#presets button").forEach(b=>b.addEventListener("click",()=>{ b.dataset.today?setToday():setPreset(+b.dataset.dur*1000); }));
+document.querySelectorAll("#shiftSel button").forEach(b=>b.addEventListener("click",()=>shiftRange(b.dataset.shift, +b.dataset.n)));
 document.getElementById("refreshNow").addEventListener("click",refresh);
 document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
 const pop=document.getElementById("popover"),cbtn=document.getElementById("customBtn"); const toInput=ms=>new Date(ms-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
-cbtn.addEventListener("click",()=>{ if(state.custom){ setPreset(21600000); return; } const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); } pop.classList.toggle("open",open); cbtn.classList.toggle("on",open); });
+cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); } pop.classList.toggle("open",open); cbtn.classList.toggle("on",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
 document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); cbtn.classList.remove("on"); setAbs(f,t); } });
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
