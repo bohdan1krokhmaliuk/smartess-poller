@@ -62,7 +62,9 @@ body.kiosk header{display:none}
 .calhdr .m{font-weight:700; font-size:.82rem}
 .calgrid{display:grid; grid-template-columns:repeat(7,1fr); gap:2px}
 .calgrid .wd{font-size:.6rem; color:var(--muted); text-align:center; font-weight:700; padding:1px 0}
-.calgrid .d{height:26px; display:flex; align-items:center; justify-content:center; font-size:.74rem; border-radius:.42rem; cursor:pointer; user-select:none; color:var(--text)}
+.calgrid .d{position:relative; height:30px; display:flex; align-items:center; justify-content:center; font-size:.74rem; border-radius:.42rem; cursor:pointer; user-select:none; color:var(--text)}
+.calgrid .d .dd{position:absolute; bottom:3px; left:50%; transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:#22c55e; pointer-events:none}
+.calgrid .d.edge .dd{background:#fff}
 .calgrid .d.oth{color:var(--muted); opacity:.45}
 .calgrid .d:hover:not(.fut){background:color-mix(in srgb,var(--accent) 20%,transparent)}
 .calgrid .d.inrange{background:color-mix(in srgb,var(--accent) 15%,transparent); border-radius:0}
@@ -168,7 +170,6 @@ body{padding-bottom:96px}
 </div>
 <div class="popover" id="popover">
   <div class="popttl">Custom period</div>
-  <div class="popq"><button data-q="yesterday">Yesterday</button><button data-q="7d">Last 7 days</button><button data-q="30d">Last 30 days</button><button data-q="thismonth">This month</button></div>
   <div class="cal"><div class="calhdr"><button id="calPrev" title="Previous month">‹</button><span class="m" id="calM"></span><button id="calNext" title="Next month">›</button></div><div class="calgrid" id="calGrid"></div></div>
   <label>From</label><input type="datetime-local" id="cfrom">
   <label>To</label><div class="poprow"><input type="datetime-local" id="cto"><button id="cnow" title="Set to current time">Now</button></div>
@@ -955,15 +956,9 @@ const cfrom=document.getElementById("cfrom"), cto=document.getElementById("cto")
 function popValidate(){ const f=new Date(cfrom.value).getTime(), t=new Date(cto.value).getTime(), ok=isFinite(f)&&isFinite(t)&&t>f; poperr.textContent=(isFinite(f)&&isFinite(t)&&t<=f)?"«To» must be after «From»":""; capply.disabled=!ok; capply.style.opacity=ok?"":".5"; }
 cfrom.addEventListener("input",popValidate); cto.addEventListener("input",popValidate);
 document.getElementById("cnow").addEventListener("click",()=>{ cto.value=toInput(Date.now()); popValidate(); });
-document.querySelectorAll("#popover .popq button").forEach(b=>b.addEventListener("click",()=>{ const q=b.dataset.q, now=Date.now(), d=new Date(); d.setHours(0,0,0,0); let f,t;
-  if(q==="yesterday"){ t=d.getTime()-1; d.setDate(d.getDate()-1); f=d.getTime(); }
-  else if(q==="7d"){ t=now; f=now-7*864e5; }
-  else if(q==="30d"){ t=now; f=now-30*864e5; }
-  else { d.setDate(1); f=d.getTime(); t=now; }   // this month
-  pop.classList.remove("open"); setAbs(f,t); }));
 capply.addEventListener("click",()=>{ const f=new Date(cfrom.value).getTime(),t=new Date(cto.value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); setAbs(f,t); } });
 // ---- range calendar (two-click: click start day, click end day; hover previews; future days disabled) ----
-var calView=null, calAnchor=null, calSel=null, calHover=null;
+var calView=null, calAnchor=null, calSel=null, calHover=null, calData=new Map(), calSeq=0;
 const dayStart=ms=>{ const d=new Date(ms); d.setHours(0,0,0,0); return d.getTime(); };
 function renderCal(){ const grid=document.getElementById("calGrid"); if(!grid||!calView)return;
   document.getElementById("calM").textContent=calView.toLocaleString([], {month:"long", year:"numeric"});
@@ -973,9 +968,13 @@ function renderCal(){ const grid=document.getElementById("calGrid"); if(!grid||!
   for(let i=0;i<42;i++){ const d=new Date(gs); d.setDate(gs.getDate()+i); const ds=d.getTime(), cls=["d"];
     if(d.getMonth()!==mo)cls.push("oth"); if(ds===today)cls.push("today"); if(ds>today)cls.push("fut");
     if(a!=null){ if(ds===a||ds===b)cls.push("edge"); else if(ds>a&&ds<b)cls.push("inrange"); }
-    html+=`<span class="${cls.join(" ")}" data-d="${ds}">${d.getDate()}</span>`; }
+    const kwh=calData.get(ds), dot=kwh!=null?`<i class="dd" style="opacity:${(0.35+Math.min(1,kwh/10)*0.65).toFixed(2)}"></i>`:"";
+    html+=`<span class="${cls.join(" ")}" data-d="${ds}"${kwh!=null?` title="${kwh.toFixed(1)} kWh solar"`:""}>${d.getDate()}${dot}</span>`; }
   grid.innerHTML=html; }
-function calOpen(){ const {from,to}=range(); calSel={start:dayStart(from), end:dayStart(to)}; calAnchor=null; calHover=null; calView=new Date(from); calView.setDate(1); calView.setHours(0,0,0,0); renderCal(); }
+function calOpen(){ const {from,to}=range(); calSel={start:dayStart(from), end:dayStart(to)}; calAnchor=null; calHover=null; calView=new Date(from); calView.setDate(1); calView.setHours(0,0,0,0); renderCal(); calLoadData(); }
+async function calLoadData(){ if(!calView)return; const seq=++calSeq; const gs=new Date(calView); gs.setDate(1-((gs.getDay()+6)%7)); const from=dayStart(gs.getTime()), to=Math.min(from+43*864e5, Date.now());   // per-day solar kWh for the visible grid → data-presence dot + amount (opacity)
+  try{ const pts=await qRange(`avg_over_time((${M.pvpow})[86400s:600s]) * 86400/3600000`, from, to, 86400); if(seq!==calSeq)return;
+    const m=new Map(); for(const [T,v] of pts){ if(v!=null) m.set(dayStart(T-12*3600e3), v); } calData=m; renderCal(); }catch(e){} }
 function calSyncInputs(){ if(!calSel)return; cfrom.value=toInput(calSel.start); cto.value=toInput(calSel.end+86400000-1); popValidate(); }
 function calFromInputs(){ const f=new Date(cfrom.value).getTime(), t=new Date(cto.value).getTime(); if(isFinite(f)&&isFinite(t)){ calSel={start:dayStart(f),end:dayStart(t)}; calAnchor=null; renderCal(); } }
 function calPick(ds){ if(ds>dayStart(Date.now()))return;
@@ -986,8 +985,8 @@ const calGrid=document.getElementById("calGrid");
 calGrid.addEventListener("click",e=>{ e.stopPropagation(); const c=e.target.closest(".d"); if(c&&!c.classList.contains("fut"))calPick(+c.dataset.d); });   // stop bubbling: renderCal() replaces the clicked node, so the global outside-click handler would otherwise see a detached target and close the popup
 calGrid.addEventListener("mouseover",e=>{ const c=e.target.closest(".d"); if(c&&calAnchor!=null){ const h=+c.dataset.d; if(h!==calHover){ calHover=h; renderCal(); } } });
 calGrid.addEventListener("mouseleave",()=>{ if(calAnchor!=null&&calHover!=null){ calHover=null; renderCal(); } });
-document.getElementById("calPrev").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()-1); renderCal(); });
-document.getElementById("calNext").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()+1); renderCal(); });
+document.getElementById("calPrev").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()-1); renderCal(); calLoadData(); });
+document.getElementById("calNext").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()+1); renderCal(); calLoadData(); });
 cfrom.addEventListener("change",calFromInputs); cto.addEventListener("change",calFromInputs);
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
