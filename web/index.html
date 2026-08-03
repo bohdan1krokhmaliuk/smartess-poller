@@ -54,6 +54,21 @@ body.kiosk header{display:none}
 #cnow{flex:0 0 auto; border:1px solid var(--border); background:var(--panel2); color:var(--text); border-radius:.4rem; padding:.35rem .5rem; font-size:.74rem; font-weight:600; cursor:pointer}
 #cnow:hover{border-color:var(--accent); color:var(--accent)}
 .poperr{color:var(--bad); font-size:.7rem; min-height:.9rem; margin:.25rem 0 0}
+#popover{max-height:calc(100vh - 88px); overflow-y:auto}
+.cal{margin:.15rem 0 .45rem}
+.calhdr{display:flex; align-items:center; justify-content:space-between; margin-bottom:.35rem}
+.calhdr button{border:1px solid var(--border); background:var(--panel2); color:var(--text); border-radius:.45rem; width:28px; height:26px; cursor:pointer; font-weight:800; font-size:.95rem; line-height:1}
+.calhdr button:hover{border-color:var(--accent); color:var(--accent)}
+.calhdr .m{font-weight:700; font-size:.82rem}
+.calgrid{display:grid; grid-template-columns:repeat(7,1fr); gap:2px}
+.calgrid .wd{font-size:.6rem; color:var(--muted); text-align:center; font-weight:700; padding:1px 0}
+.calgrid .d{height:26px; display:flex; align-items:center; justify-content:center; font-size:.74rem; border-radius:.42rem; cursor:pointer; user-select:none; color:var(--text)}
+.calgrid .d.oth{color:var(--muted); opacity:.45}
+.calgrid .d:hover:not(.fut){background:color-mix(in srgb,var(--accent) 20%,transparent)}
+.calgrid .d.inrange{background:color-mix(in srgb,var(--accent) 15%,transparent); border-radius:0}
+.calgrid .d.edge{background:var(--accent); color:#fff; font-weight:700}
+.calgrid .d.today{outline:1.5px solid var(--accent); outline-offset:-2px}
+.calgrid .d.fut{opacity:.3; cursor:default}
 .mode{display:inline-flex; align-items:center; gap:.35rem; font-size:.82rem; color:var(--muted)}
 .badge{padding:.24rem .55rem; border-radius:.5rem; font-weight:700; font-size:.78rem; color:#fff; letter-spacing:.02em}
 .badge.local{background:var(--accent)} .badge.mirror{background:var(--good)} .badge.unknown{background:var(--muted)}
@@ -154,6 +169,7 @@ body{padding-bottom:96px}
 <div class="popover" id="popover">
   <div class="popttl">Custom period</div>
   <div class="popq"><button data-q="yesterday">Yesterday</button><button data-q="7d">Last 7 days</button><button data-q="30d">Last 30 days</button><button data-q="thismonth">This month</button></div>
+  <div class="cal"><div class="calhdr"><button id="calPrev" title="Previous month">‹</button><span class="m" id="calM"></span><button id="calNext" title="Next month">›</button></div><div class="calgrid" id="calGrid"></div></div>
   <label>From</label><input type="datetime-local" id="cfrom">
   <label>To</label><div class="poprow"><input type="datetime-local" id="cto"><button id="cnow" title="Set to current time">Now</button></div>
   <div class="poperr" id="poperr"></div>
@@ -934,7 +950,7 @@ document.addEventListener("keydown",e=>{ if(!(e.metaKey||e.ctrlKey))return; if(/
 document.getElementById("refreshNow").addEventListener("click",refresh);
 document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
 const pop=document.getElementById("popover"),cbtn=document.getElementById("customBtn"); const toInput=ms=>new Date(ms-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
-cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); const r=cbtn.getBoundingClientRect(); pop.style.left=Math.max(6,Math.min(r.left,innerWidth-258))+"px"; pop.style.bottom=(innerHeight-r.top+6)+"px"; popValidate(); } pop.classList.toggle("open",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
+cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); const r=cbtn.getBoundingClientRect(); pop.style.left=Math.max(6,Math.min(r.left,innerWidth-258))+"px"; pop.style.bottom=(innerHeight-r.top+6)+"px"; popValidate(); calOpen(); } pop.classList.toggle("open",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
 const cfrom=document.getElementById("cfrom"), cto=document.getElementById("cto"), capply=document.getElementById("capply"), poperr=document.getElementById("poperr");
 function popValidate(){ const f=new Date(cfrom.value).getTime(), t=new Date(cto.value).getTime(), ok=isFinite(f)&&isFinite(t)&&t>f; poperr.textContent=(isFinite(f)&&isFinite(t)&&t<=f)?"«To» must be after «From»":""; capply.disabled=!ok; capply.style.opacity=ok?"":".5"; }
 cfrom.addEventListener("input",popValidate); cto.addEventListener("input",popValidate);
@@ -946,6 +962,33 @@ document.querySelectorAll("#popover .popq button").forEach(b=>b.addEventListener
   else { d.setDate(1); f=d.getTime(); t=now; }   // this month
   pop.classList.remove("open"); setAbs(f,t); }));
 capply.addEventListener("click",()=>{ const f=new Date(cfrom.value).getTime(),t=new Date(cto.value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); setAbs(f,t); } });
+// ---- range calendar (two-click: click start day, click end day; hover previews; future days disabled) ----
+var calView=null, calAnchor=null, calSel=null, calHover=null;
+const dayStart=ms=>{ const d=new Date(ms); d.setHours(0,0,0,0); return d.getTime(); };
+function renderCal(){ const grid=document.getElementById("calGrid"); if(!grid||!calView)return;
+  document.getElementById("calM").textContent=calView.toLocaleString([], {month:"long", year:"numeric"});
+  const wd=["Mo","Tu","We","Th","Fr","Sa","Su"]; let html=wd.map(w=>`<span class="wd">${w}</span>`).join("");
+  const gs=new Date(calView); gs.setDate(1-((gs.getDay()+6)%7)); const today=dayStart(Date.now()), mo=calView.getMonth();
+  let a=calSel?calSel.start:null, b=calSel?calSel.end:null; if(calAnchor!=null&&calHover!=null){ a=Math.min(calAnchor,calHover); b=Math.max(calAnchor,calHover); }
+  for(let i=0;i<42;i++){ const d=new Date(gs); d.setDate(gs.getDate()+i); const ds=d.getTime(), cls=["d"];
+    if(d.getMonth()!==mo)cls.push("oth"); if(ds===today)cls.push("today"); if(ds>today)cls.push("fut");
+    if(a!=null){ if(ds===a||ds===b)cls.push("edge"); else if(ds>a&&ds<b)cls.push("inrange"); }
+    html+=`<span class="${cls.join(" ")}" data-d="${ds}">${d.getDate()}</span>`; }
+  grid.innerHTML=html; }
+function calOpen(){ const {from,to}=range(); calSel={start:dayStart(from), end:dayStart(to)}; calAnchor=null; calHover=null; calView=new Date(from); calView.setDate(1); calView.setHours(0,0,0,0); renderCal(); }
+function calSyncInputs(){ if(!calSel)return; cfrom.value=toInput(calSel.start); cto.value=toInput(calSel.end+86400000-1); popValidate(); }
+function calFromInputs(){ const f=new Date(cfrom.value).getTime(), t=new Date(cto.value).getTime(); if(isFinite(f)&&isFinite(t)){ calSel={start:dayStart(f),end:dayStart(t)}; calAnchor=null; renderCal(); } }
+function calPick(ds){ if(ds>dayStart(Date.now()))return;
+  if(calAnchor==null){ calAnchor=ds; calSel={start:ds,end:ds}; }
+  else { calSel={start:Math.min(calAnchor,ds), end:Math.max(calAnchor,ds)}; calAnchor=null; calSyncInputs(); }
+  renderCal(); }
+const calGrid=document.getElementById("calGrid");
+calGrid.addEventListener("click",e=>{ const c=e.target.closest(".d"); if(c&&!c.classList.contains("fut"))calPick(+c.dataset.d); });
+calGrid.addEventListener("mouseover",e=>{ const c=e.target.closest(".d"); if(c&&calAnchor!=null){ calHover=+c.dataset.d; renderCal(); } });
+calGrid.addEventListener("mouseleave",()=>{ if(calAnchor!=null&&calHover!=null){ calHover=null; renderCal(); } });
+document.getElementById("calPrev").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()-1); renderCal(); });
+document.getElementById("calNext").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()+1); renderCal(); });
+cfrom.addEventListener("change",calFromInputs); cto.addEventListener("change",calFromInputs);
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
 cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ const S=(id,v)=>document.getElementById(id).value=(v==null?"":v); S("tariff",TARIFF||""); document.getElementById("currency").value=CUR; S("pvmax",PVMAX||""); S("pvlat",PVLAT); S("pvlon",PVLON); S("pvkwp",PVKWP||""); S("pvtilt",PVTILT); S("pvaz",PVAZ); document.getElementById("agg").value=AGG; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
