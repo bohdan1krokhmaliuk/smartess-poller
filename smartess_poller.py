@@ -1163,6 +1163,22 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 self._reply(200, "application/json", json.dumps(events))
                 return
 
+            if path.startswith("/query/"):             # read-only PI30 probe: send a Q… query, return raw reply
+                cmd = path[len("/query/"):].strip("/").upper()
+                if not (cmd.startswith("Q") and cmd.isalnum() and 2 <= len(cmd) <= 16):
+                    self._reply(400, "application/json", json.dumps(
+                        {"error": "read-only Q… queries only (no SET commands)", "cmd": cmd}))
+                    return
+                with state_lock:
+                    cur_mode = state["mode"]
+                if cur_mode != "local":                # the local poll loop owns the RS485 bus
+                    self._reply(409, "application/json", json.dumps({"error": "needs local mode", "mode": cur_mode}))
+                    return
+                box = queue_cmd(cmd)                    # replies with data (not "(ACK") -> ok stays False, no re-read
+                self._reply(200, "application/json", json.dumps(
+                    {"cmd": cmd, "reply": box.get("reply", ""), "supported": bool(box.get("reply")) and box.get("reply") not in ("NAK", "(no reply)")}))
+                return
+
             if path in ("/inverter", "/inverter.html"):
                 try:
                     with open(os.path.join(web_dir, "inverter.html"), "rb") as f:
