@@ -262,10 +262,13 @@ const SECTIONS=[
  {name:"☀️ Solar", panels:[
    {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#ef4444",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
    {t:"multi",title:"☀ This period",span:3,items:[
-     {label:"Prediction error",client:"errPctRange",unit:"%",dec:0,color:"var(--muted)"},
-     {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
+     {label:"Pred. err (measured)",client:"errPctRange",unit:"%",dec:0,color:"var(--muted)"},
+     {label:"Pred. err (whole)",client:"errPctPeriod",unit:"%",dec:0,color:"var(--muted)"},
+     {label:"Avg available",dyn:w=>`avg_over_time(weather_pv_potential_w[${w}s])`,unit:"W",color:"#3b82f6"},
      {label:"Potential peak",dyn:w=>`max_over_time(weather_pv_potential_w[${w}s])`,unit:"W",color:"#3b82f6"},
-     {label:"Avg irradiance",dyn:w=>`avg_over_time(weather_gti[${w}s])`,unit:"W/m²",dec:0,color:"#f59e0b"}]},
+     {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
+     {label:"Avg irradiance",dyn:w=>`avg_over_time(weather_gti[${w}s])`,unit:"W/m²",dec:0,color:"#f59e0b"},
+     {label:"Avg cloud",dyn:w=>`avg_over_time(weather_cloud[${w}s])`,unit:"%",dec:0,color:"var(--muted)"}]},
    {t:"sky",title:"Sun path & sky",span:3},
    {t:"chart",pvhead:1,title:"Produced vs predicted (error shaded)",unit:"W",span:9,series:[
      {label:"produced",color:C.pv},{label:"available (predicted)",color:"#3b82f6"},{label:"load",color:C.cons},
@@ -692,6 +695,19 @@ const CLIENT={
       if(v>a) ref=a; else if((l-v)>thr) ref=Math.min(a,l);
       if(ref==null)continue; sp+=v; sc+=ref; }
     return sc>0? 100*(sp-sc)/sc : null; },
+  // WHOLE-period error %: same shaded error, but as a fraction of ALL the daylight predicted potential —
+  // unverifiable moments (not maxed) count as 0 error. Skips timestamps with no data (produced/weather gap).
+  errPctPeriod: async(win,at)=>{ const to=at||Date.now(), from=to-win*1000, step=Math.max(win>172800?Math.round(win/288):300,60);
+    const [pv,av,ld]=await Promise.all([
+      qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step),
+      qRange(`avg_over_time(weather_pv_potential_w[${Math.max(step,3900)}s])`,from,to,step),
+      qRange(`avg_over_time((inverter_ac_output_active_power)[${step}s])`,from,to,step)]);
+    const avM=new Map(av.map(p=>[p[0],p[1]])), ldM=new Map(ld.map(p=>[p[0],p[1]])); let num=0,den=0;
+    for(const [t,v] of pv){ const a=avM.get(t); if(a==null||a<50)continue;   // no weather data here -> not part of the formula
+      const l=ldM.get(t)||0, thr=l<500?250:100;
+      const err = v>a? v-a : ((l-v)>thr? v-Math.min(a,l) : 0);   // 0 where the panels weren't maxed (can't verify -> assume no error)
+      num+=err; den+=a; }
+    return den>0? 100*num/den : null; },
   // wasted = potential − produced, captured = produced/potential. Computed here (two separate
   // single-metric queries, subtracted in JS) because doing it in MetricsQL 422s on label mismatch.
   wastedKwh: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await qInstant(dv.pv(w),at); return p==null?null:Math.max(0,p-(q||0)); },
