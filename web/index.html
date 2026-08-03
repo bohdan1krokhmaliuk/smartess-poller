@@ -861,8 +861,11 @@ document.querySelectorAll("#snapSel button").forEach(b=>b.addEventListener("clic
 
 // ---------- bottom timeline brush (overview strip = ~6× the window so the handle stays grabbable at any zoom) ----------
 var TLCTX=null, tlDrag=null, tlMoved=false;
-function tlContext(){ const {from,to}=range(), now=Date.now(), span=Math.max(to-from,60e3);
-  const ctx=Math.max(span*6, 6*3600e3), end=Math.min(now, to+(ctx-span)/2); return {start:end-ctx, span:ctx}; }
+function tlContext(){ const {from,to}=range(), now=Date.now(), span=Math.max(to-from,60e3), ctx=Math.max(span*6, 12*3600e3);
+  // static/snapped range (incl. this-week/month/year, which end in the future) -> CENTRE it in the strip;
+  // live preset -> pin the window near the right edge ('now'), with a small future margin.
+  const end = state.kind==="abs" ? (from+to)/2 + ctx/2 : now + (ctx-span)*0.06;
+  return {start:end-ctx, span:ctx}; }
 function tlBox(from,to,c){ const win=document.getElementById("tbWin"); if(!win)return;
   const L=Math.max(0,(from-c.start)/c.span), R=Math.min(1,(to-c.start)/c.span);
   win.style.left=(L*100)+"%"; win.style.width=(Math.max(0,R-L)*100)+"%"; }
