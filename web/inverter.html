@@ -72,10 +72,12 @@ td.desc{color:var(--muted); line-height:1.45}
 <main>
   <div class="ident" id="ident">…</div>
   <div class="note">
-    <b>Тільки перегляд</b> — ця сторінка нічого не змінює. Показує поточні уставки інвертора (з QPIRI),
-    де вони в меню і на що їх можна поміняти. Номери програм — <b>типові для Axpert/VMIII</b>;
-    на своєму екрані звіряйся за <b>назвою</b> пункту. <span class="tag">ок</span> — налаштовано правильно,
-    не чіпаємо. <span class="tag man">керується</span> — міняється з дашборду.
+    <b>Тільки перегляд</b> — ця сторінка нічого не змінює. Показує поточні уставки інвертора
+    (QPIRI) і прапорці приладу (QFLAG): що це, які опції та де в меню. Номери програм —
+    <b>типові для Axpert/VMIII</b>; на своєму екрані звіряйся за <b>назвою</b> пункту.
+    <span class="tag">ок</span> — налаштовано правильно, не чіпаємо.
+    <span class="tag man">керується</span> — міняється з дашборду.
+    Довідник команд і значень: <b>github.com/jblance/mpp-solar</b> (PI30).
   </div>
   <div id="cats"></div>
 </main>
@@ -127,10 +129,32 @@ const CAT = [
     opts:"Single · Parallel · Phase 1/2/3",
     desc:"Одиночний чи паралель / трифазна група."},
  ]},
+ { name:"🔧 Прапорці приладу (QFLAG)", rows:[
+   {k:"flag_backlight", flag:1, label:"Підсвітка LCD", opts:"увімк / вимк",
+    desc:"Підсвічування екрана інвертора."},
+   {k:"flag_silence_buzzer", flag:1, label:"Зумер (звук)", opts:"увімк / вимк",
+    desc:"Звукові сигнали подій."},
+   {k:"flag_alarm_on_source_interrupt", flag:1, label:"Сигнал при зникненні мережі", opts:"увімк / вимк",
+    desc:"Пищати, коли зникає основне джерело (мережа)."},
+   {k:"flag_overload_bypass", flag:1, label:"Bypass при перевантаженні", opts:"увімк / вимк",
+    desc:"При перевантаженні перейти на мережу (bypass), а не вимикатись."},
+   {k:"flag_overload_restart", flag:1, label:"Авто-рестарт після перевантаження", opts:"увімк / вимк",
+    desc:"Самому вмикатись після аварії перевантаження."},
+   {k:"flag_overtemp_restart", flag:1, label:"Авто-рестарт після перегріву", opts:"увімк / вимк",
+    desc:"Самому вмикатись після аварії перегріву."},
+   {k:"flag_power_saving", flag:1, label:"Енергозбереження", opts:"увімк / вимк",
+    desc:"Зменшувати вихід при дуже малому навантаженні."},
+   {k:"flag_lcd_home_timeout", flag:1, label:"LCD → домашній екран", opts:"увімк / вимк",
+    desc:"Повертатись на головний екран через ~1 хв бездіяльності."},
+   {k:"flag_fault_record", flag:1, label:"Запис кодів аварій", opts:"увімк / вимк",
+    desc:"Зберігати журнал несправностей."},
+ ]},
  { name:"📋 Паспорт (тільки читання)", ro:1, rows:[
    {k:"machine_type", label:"Тип машини"},
    {k:"topology", label:"Топологія"},
    {k:"parallel_max_number", label:"Макс. паралельних"},
+   {k:"pv_ok_condition", label:"Умова «PV OK»"},
+   {k:"pv_power_balance", label:"Баланс потужності PV"},
    {k:"battery_rating_voltage", label:"Номінал батареї", unit:" V"},
    {k:"grid_rating_voltage", label:"Номінал мережі", unit:" V"},
    {k:"grid_rating_current", label:"Номінал струму мережі", unit:" A"},
@@ -143,6 +167,7 @@ const CAT = [
 
 const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 function valOf(r,d){
+  if(r.flag){ const v=d[r.k]; return (v===1||v==="1")?"увімк":(v===0||v==="0")?"вимк":"—"; }
   const raw = r.enum ? (d[r.k+"_name"] ?? d[r.k]) : d[r.k];
   if(raw===undefined||raw===null||raw==="") return "—";
   return esc(raw) + (r.enum?"":(r.unit||""));
