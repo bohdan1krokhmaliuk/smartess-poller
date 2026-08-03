@@ -712,10 +712,12 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
           histView?qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st):Promise.resolve(null),
           qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st) ]);   // house load
         const availM=availVM?new Map(availVM.map(p=>[p[0],p[1]])):null, ldM=new Map((ld||[]).map(p=>[p[0],p[1]]));
+        const ldA=ld||[], gateL=new Map();               // 7-sample smoothed load for the GATE only, so brief load dips / missing buckets don't punch small holes (raw load still drives the line)
+        for(let i=0;i<ldA.length;i++){ let s=0,c=0; for(let j=i-3;j<=i+3;j++) if(j>=0&&j<ldA.length){s+=ldA[j][1];c++;} gateL.set(ldA[i][0],c?s/c:ldA[i][1]); }
         const avail=[], under=[], over=[];
         for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null);
           if(a==null) continue; avail.push([t,a]);
-          const l=ldM.get(t)||0, thr=l<500?250:100, ceil=Math.min(a,l), maxed=(l-v)>thr;   // draw ONLY when the load outran output (panels maxed) — no magnitude dead-zone
+          const lg=gateL.has(t)?gateL.get(t):(ldM.get(t)||0), thr=lg<500?250:100, ceil=Math.min(a,lg), maxed=(lg-v)>thr;   // gate/threshold/cap all on the smoothed load
           const isU=maxed && v>a, isO=maxed && v<a;      // colour purely by sign: produced above forecast = green, below = red
           under.push([t, v, isU?a:v, isU?v-a:0]);        // GREEN band: produced(top)..predicted(bottom); zero-height otherwise — DENSE (a point every step) so it never bridges over the opposite colour
           over.push([t, isO?ceil:v, v, isO?v-ceil:0]);   // RED band: min(predicted,load)(top)..produced(bottom); zero-height otherwise
