@@ -472,9 +472,11 @@ function hexA(c,a){ if(c&&c[0]==="#"){ const n=c.length===4?c.replace(/#(.)(.)(.
   return `rgba(${parseInt(n.slice(1,3),16)},${parseInt(n.slice(3,5),16)},${parseInt(n.slice(5,7),16)},${a})`; } return c; }
 let CONN=true;
 function conn(ok){ if(ok!==CONN){ CONN=ok; document.getElementById("banner").classList.toggle("show",!ok); } }
-async function qInstant(expr,atMs){ try{ const r=await fetch(`${VM}/query?query=${encodeURIComponent(expr)}&time=${Math.round(atMs/1000)}`);
+let RCTL=null, RSIG=null;   // aborts a refresh's still-running fetches when the period changes again (rapid nav)
+function rotateAbort(){ try{ if(RCTL)RCTL.abort(); }catch(e){} RCTL=(typeof AbortController!=="undefined")?new AbortController():null; RSIG=RCTL?RCTL.signal:null; }
+async function qInstant(expr,atMs){ try{ const r=await fetch(`${VM}/query?query=${encodeURIComponent(expr)}&time=${Math.round(atMs/1000)}`, RSIG?{signal:RSIG}:undefined);
   const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return null; const v=parseFloat(res[0].value[1]); return isFinite(v)?v:null; }catch(e){ conn(false); return undefined; } }
-async function qRange(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${st}`);
+async function qRange(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${st}`, RSIG?{signal:RSIG}:undefined);
   const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return []; let best=res[0]; for(const s of res)if(s.values.length>best.values.length)best=s;
   return best.values.map(p=>[p[0]*1000,parseFloat(p[1])]).filter(p=>isFinite(p[1])); }catch(e){ conn(false); return []; } }
 
@@ -723,29 +725,19 @@ function tempAt(ms){ if(!WEATHER)return null; const h=WEATHER.tempH; const cur=W
 // pre-counter (imported/backfill) days fall back to a per-DAY integral. Per-day integrals use POINT queries, never a
 // day-stepped range query: in a range query VM decimates the series to the step, so integrate/max/min/sum over a
 // window ≈ step see ~1 sample and return garbage — that was the "Produced = 0 for a single old day" bug.
-const PVPOW="inverter_pv_input_voltage*inverter_pv_input_current";
-const _cStart=new Map();   // counter -> earliest timestamp (ms); it never changes, so cache forever
-async function counterStart(c){ if(_cStart.has(c))return _cStart.get(c); const ts=await qInstant(`min_over_time(timestamp(${c})[420d:3h])`,Date.now()); const ms=(ts!=null)?ts*1000:null; _cStart.set(c,ms); return ms; }
-const _seg=new Map();   // powerExpr|dayStart -> Promise<kWh>, cached only for whole immutable past days
-function segKwh(power,s,e){ if(e<=s) return Promise.resolve(0); const ds=dayStart(s), full=(s===ds&&e===ds+86400000), key=full?power+"|"+ds:null;
-  if(key&&_seg.has(key)) return _seg.get(key);
-  const job=qInstant(`integrate((${power})[${Math.round((e-s)/1000)}s])/3.6e6`, e).then(v=>(v!=null&&v>0)?v:0);   // POINT query over exactly [s,e] (a range step would decimate the integral)
-  if(key&&e<=Date.now()) _seg.set(key,job); return job; }
-let _eMemo=new Map(), _eMemoKey="";
-function eKwh(counter,power,from,to){
-  const rk=from+"|"+to; if(rk!==_eMemoKey){ _eMemo=new Map(); _eMemoKey=rk; }     // one refresh shares from/to → memoise per counter
-  if(_eMemo.has(counter)) return _eMemo.get(counter);
-  const job=(async()=>{
-    if(from>=to) return 0;
-    const cS=await counterStart(counter); let sum=0;
-    if(cS!=null && to>cS){ const a=await qInstant(`last_over_time(${counter}[2h])`,Math.max(from,cS)), b=await qInstant(`last_over_time(${counter}[2h])`,to); if(a!=null&&b!=null&&b>=a) sum+=b-a; }   // counter era → exact lifetime delta
-    const capEnd=(cS!=null&&cS<to)?cS:to, segs=[];   // pre-counter portion ends where the counter takes over (or at `to`)
-    for(let d=dayStart(from); d<capEnd; d+=86400000){ const s=Math.max(d,from), e=Math.min(d+86400000,capEnd); if(e>s) segs.push([s,e]); }   // one segment per local day, CLIPPED to the window — an edge day only counts its overlap, so a window that spills into the previous day no longer adds that whole day
-    if(segs.length) sum+=(await Promise.all(segs.map(([s,e])=>segKwh(power,s,e)))).reduce((x,y)=>x+y,0);
-    return sum;
-  })();
-  _eMemo.set(counter,job); return job;
+// period energy now comes from the poller in ONE request (/energy) — the server uses the lifetime counter where it
+// exists and a month-chunked integral for older days. Memoised per window so all the energy cards share one fetch.
+let _enMemo=null, _enKey="";
+function fetchEnergy(from,to){
+  const rk=Math.round(from)+"|"+Math.round(to);
+  if(rk!==_enKey){ _enKey=rk;
+    _enMemo=fetch(`/energy?keys=pv,cons,bat,grid&from=${Math.round(from)}&to=${Math.round(to)}`, RSIG?{signal:RSIG}:undefined)
+      .then(r=>{ conn(true); return r.json(); })
+      .catch(()=>{ conn(false); _enKey=""; return {}; });   // don't cache a failed/aborted fetch → retry next refresh
+  }
+  return _enMemo;
 }
+async function eKwh(key,w,at){ const t=at||Date.now(); const j=await fetchEnergy(t-w*1000, t); const v=j&&j[key]; return (v==null)?null:v; }
 const CLIENT={
   availNow: async()=> pvPotentialW(),
   spareNow: async()=>{ const a=pvPotentialW(); if(a==null)return null; const pv=await qInstant(M.pvpow,Date.now()); return (pv==null)?null:Math.max(0,a-pv); },
@@ -801,10 +793,10 @@ const CLIENT={
   wastedKwh: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await CLIENT.genKwh(w,at); return p==null?null:Math.max(0,p-(q||0)); },
   capturedPct: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await CLIENT.genKwh(w,at); return p?Math.min(100,100*(q||0)/p):null; },
   // period energy via eKwh (exact where the counter spans the window, per-day sum otherwise) — no more silently-dropped days
-  genKwh:  (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_pv_total",PVPOW,t-w*1000,t); },
-  consKwh: (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_consumed_total","inverter_ac_output_active_power",t-w*1000,t); },
-  batKwh:  (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_battery_out_total","inverter_battery_voltage*inverter_battery_discharge_current",t-w*1000,t); },
-  gridKwh: (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_grid_total",M.grid,t-w*1000,t); },
+  genKwh:  (w,at)=>eKwh("pv",w,at),
+  consKwh: (w,at)=>eKwh("cons",w,at),
+  batKwh:  (w,at)=>eKwh("bat",w,at),
+  gridKwh: (w,at)=>eKwh("grid",w,at),
   selfPct: async(w,at)=>{ const g=await CLIENT.genKwh(w,at), c=await CLIENT.consKwh(w,at); return (c&&c>0)?Math.min(100,100*(g||0)/c):null; },
   costTotal: async(w,at)=>{ const c=await CLIENT.consKwh(w,at); return c==null?null:c*TARIFF; },
   costGrid:  async(w,at)=>{ const g=await CLIENT.gridKwh(w,at); return g==null?null:g*TARIFF; },
@@ -837,7 +829,7 @@ function renderSky(c){ const el=c.el;
      '<span>'+(rise&&set?'↑'+rise.toTimeString().slice(0,5)+' ↓'+set.toTimeString().slice(0,5):'')+'</span></div>';
   el.innerHTML=s; }
 
-async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
+async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
   try{ drawTimeline(); }catch(e){}
   const histView=to<now-2*86400000;   // whole visible window older than ~2 days -> historical (~5-min cloud data + backfilled weather)
   const aw=histView?Math.max(st,360):st;   // aggregate over >=6 min so every step point catches a sample -> lines stay visible when zoomed in; live data uses st unchanged
@@ -903,7 +895,8 @@ document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",
 function markPreset(el){ document.querySelectorAll("#presets button").forEach(b=>b.classList.toggle("on",b===el)); }
 function setPreset(dur){ state.kind="preset"; state.dur=dur; state.abs=null; state.custom=false; markPreset([...document.querySelectorAll("#presets button")].find(b=>+b.dataset.dur*1000===dur)); updateCustomBtn(); recordHist(); refresh(); }
 function setToday(){ state.kind="today"; state.abs=null; state.custom=false; markPreset(document.querySelector('#presets [data-today]')); updateCustomBtn(); recordHist(); refresh(); }
-function setAbs(from,to){ state.kind="abs"; state.abs={from,to}; state.custom=true; markPreset(null); updateCustomBtn(); recordHist(); refresh(); }
+let _refT=null; function scheduleRefresh(){ clearTimeout(_refT); _refT=setTimeout(refresh, 130); }   // coalesce rapid period changes into one data refresh
+function setAbs(from,to){ state.kind="abs"; state.abs={from,to}; state.custom=true; markPreset(null); updateCustomBtn(); recordHist(); try{drawTimeline();}catch(e){} scheduleRefresh(); }
 function addCal(ms,unit,n){ const d=new Date(ms); if(unit==="d")d.setDate(d.getDate()+n); else if(unit==="M")d.setMonth(d.getMonth()+n); else if(unit==="y")d.setFullYear(d.getFullYear()+n); return d.getTime(); }
 function shiftRange(unit,n){ const r=range(); let nf=addCal(r.from,unit,n),nt=addCal(r.to,unit,n); const now=Date.now(); if(nt>now){ const w=nt-nf; nt=now; nf=now-w; } setAbs(nf,nt); }   // shift the window by day/month/year, keep its width, never past now
 function isLive(){ return state.kind==="preset" || state.kind==="today" || (state.abs && state.abs.to>=Date.now()); }   // presets & today always live; custom range live only while it includes now

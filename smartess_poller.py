@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 import urllib.request
+import urllib.parse
 
 try:
     import paho.mqtt.client as mqtt
@@ -1022,6 +1023,130 @@ def handle_passthrough(dongle, mc, cfg, cloud):
             pass
 
 
+# ---- period energy (kWh), aggregated server-side ----
+# The dashboard asks for a whole period in ONE request instead of firing hundreds of VM queries.
+# Uses the lifetime counter wherever it exists (robust to sparse sampling); pre-counter (imported)
+# days fall back to a time-weighted integral — per-day point queries for short spans, one month-chunked
+# range query per calendar month for long ones. Whole immutable past days/months are cached in-process.
+# Never trust arbitrary MetricsQL from the client: only the 4 keys below map to fixed expressions.
+_EN_VM = os.environ.get("SMARTESS_VM_URL", "http://127.0.0.1:8428")
+_EN_KEYS = {
+    "pv":   ("energymeter_pv_total", "inverter_pv_input_voltage*inverter_pv_input_current"),
+    "cons": ("energymeter_consumed_total", "inverter_ac_output_active_power"),
+    "bat":  ("energymeter_battery_out_total", "inverter_battery_voltage*inverter_battery_discharge_current"),
+    "grid": ("energymeter_grid_total",
+             "clamp_min(inverter_ac_output_active_power"
+             " + (inverter_battery_voltage*inverter_battery_charge_current)"
+             " - (inverter_pv_input_voltage*inverter_pv_input_current)"
+             " - (inverter_battery_voltage*inverter_battery_discharge_current),0)"),
+}
+_en_cstart, _en_seg, _en_month = {}, {}, {}
+
+def _en_get(params):
+    with urllib.request.urlopen(_EN_VM + "/api/v1/" + params, timeout=25) as r:
+        return json.loads(r.read())
+
+def _en_inst(expr, t_s):
+    try:
+        j = _en_get("query?query=%s&time=%d" % (urllib.parse.quote(expr), int(t_s)))
+        res = j.get("data", {}).get("result") or []
+        return float(res[0]["value"][1])
+    except Exception:
+        return None
+
+def _en_range(expr, a_s, b_s, step):
+    try:
+        j = _en_get("query_range?query=%s&start=%d&end=%d&step=%d"
+                    % (urllib.parse.quote(expr), int(a_s), int(b_s), int(step)))
+        res = j.get("data", {}).get("result") or []
+        if not res:
+            return []
+        best = max(res, key=lambda s: len(s.get("values", [])))
+        out = []
+        for t, v in best["values"]:
+            try:
+                out.append((float(t), float(v)))
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return []
+
+def _en_daystart(ms):
+    lt = time.localtime(ms / 1000.0)
+    return int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))) * 1000
+
+def _en_counter_start(counter):
+    if counter not in _en_cstart:
+        ts = _en_inst("min_over_time(timestamp(%s)[420d:3h])" % counter, time.time())
+        _en_cstart[counter] = ts * 1000 if ts is not None else None
+    return _en_cstart[counter]
+
+def _en_seg_kwh(power, s, e):
+    if e <= s:
+        return 0.0
+    ds = _en_daystart(s)
+    full = (s == ds and e == ds + 86400000)
+    key = (power, ds) if full else None
+    if key is not None and key in _en_seg:
+        return _en_seg[key]
+    secs = int(round((e - s) / 1000.0))
+    v = _en_inst("integrate((%s)[%ds])/3.6e6" % (power, secs), e / 1000.0)
+    r = v if (v and v > 0) else 0.0
+    if key is not None and e <= time.time() * 1000:
+        _en_seg[key] = r
+    return r
+
+def _en_month_bf(power, m_start, m_end, frm, bf_end):
+    key = (power, _en_daystart(m_start), m_end)
+    if key in _en_month:
+        pts = _en_month[key]
+    else:
+        pts = _en_range("sum_over_time((%s)[86400s:300s]) * 300/3600000" % power,
+                        _en_daystart(m_start) / 1000.0, m_end / 1000.0, 86400)
+        if m_end <= time.time() * 1000:
+            _en_month[key] = pts
+    lo = _en_daystart(frm)
+    s = 0.0
+    for t, v in pts:                                    # map each daily bucket to its local day, keep those in range
+        day = _en_daystart(t * 1000 - 12 * 3600 * 1000)
+        if v > 0 and lo <= day < bf_end:
+            s += v
+    return s
+
+def period_energy(key, frm, to):
+    if key not in _EN_KEYS:
+        return None
+    counter, power = _EN_KEYS[key]
+    if frm >= to:
+        return 0.0
+    cS = _en_counter_start(counter)
+    total = 0.0
+    if cS is not None and to > cS:                       # counter era → exact lifetime delta
+        a = _en_inst("last_over_time(%s[2h])" % counter, max(frm, cS) / 1000.0)
+        b = _en_inst("last_over_time(%s[2h])" % counter, to / 1000.0)
+        if a is not None and b is not None and b >= a:
+            total += b - a
+    bf_end = cS if (cS is not None and cS < to) else to  # pre-counter (backfill) portion
+    if bf_end <= frm:
+        return total
+    span_days = (bf_end - _en_daystart(frm)) / 86400000.0
+    if span_days <= 2.5:                                 # short → exact per-day point integrals (clipped to the window)
+        d = _en_daystart(frm)
+        while d < bf_end:
+            total += _en_seg_kwh(power, max(d, frm), min(d + 86400000, bf_end))
+            d += 86400000
+    else:                                                # long → one month-chunked range query per calendar month
+        m = frm
+        while m < bf_end:
+            lt = time.localtime(m / 1000.0)
+            nm = int(time.mktime((lt.tm_year, lt.tm_mon + 1, 1, 0, 0, 0, 0, 0, -1))) * 1000
+            m_end = min(nm, bf_end)
+            total += _en_month_bf(power, m, m_end, frm, bf_end)
+            m = m_end
+    return total
+
+
 def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
     """Lightweight web server: serves the static dashboard (web/index.html),
     proxies read-only VictoriaMetrics queries (/vm/...), and toggles the mode
@@ -1136,6 +1261,23 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
 
             if path == "/info":
                 self._reply(200, "application/json", json.dumps(INFO))
+                return
+
+            if path == "/energy":                       # aggregated period energy (kWh); ?keys=pv,cons,bat,grid&from=<ms>&to=<ms>
+                q = urllib.parse.parse_qs(query)
+                try:
+                    frm = int(q.get("from", ["0"])[0]); to = int(q.get("to", ["0"])[0])
+                except Exception:
+                    frm, to = 0, 0
+                out = {}
+                for k in (q.get("keys", ["pv"])[0]).split(","):
+                    k = k.strip()
+                    if k in _EN_KEYS:
+                        try:
+                            out[k] = period_energy(k, frm, to)
+                        except Exception:
+                            out[k] = None
+                self._reply(200, "application/json", json.dumps(out))
                 return
 
             if path == "/rated":                       # full QPIRI snapshot (read-only)
