@@ -262,7 +262,10 @@ const SECTIONS=[
      {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
    {t:"chart",pvhead:1,title:"Produced / available (W)",unit:"W",span:9,series:[
-     {label:"produced",color:C.pv},{label:"available (predicted)",color:"#3b82f6"},{label:"shortfall: produced < load & < predicted",color:"#ef4444"},{label:"load",color:C.cons}]},
+     {label:"produced",color:C.pv},{label:"available (predicted)",color:"#3b82f6"},{label:"load",color:C.cons}]},
+   {t:"chart",prederr:1,title:"Prediction error: produced − predicted (W)",unit:"W",span:12,series:[
+     {label:"produced > predicted (model under-shot)",color:C.pv,fill:1},
+     {label:"produced < predicted while panels maxed (model over-shot)",color:"#ef4444",fill:1}]},
    {t:"sky",title:"Sun path & sky",span:3},
    {t:"chart",title:"Irradiance — GTI (W/m²)",unit:"W/m²",span:12,series:[{expr:"weather_gti",label:"GTI on the array plane",color:"#f59e0b",wx:1}]},
  ]},
@@ -341,7 +344,8 @@ const DESC={
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
  "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available for the whole day (forecast for the hours not yet passed); Appx unused today = the part you didn't use so far (est.); Cloud = current cloud cover.",
- "Produced / available (W)":"Green (filled) = actual PV produced. Blue = predicted potential from the real weather (GTI). Purple = house load. Red = a genuine shortfall: the load pulled more than the panels produced (so the array was maxed, not throttled) yet PV still came in below the weather prediction — hot/soiled panels, dusk cut-off, or an optimistic model. A blue-only gap with no red = the panels just weren't pushed that hard (load was low), so we can't tell if they'd have delivered. Historical days use backfilled weather; recent days use the live model.",
+ "Produced / available (W)":"Green (filled) = actual PV produced. Blue = predicted potential from the real weather (GTI). Purple = house load. When produced sits below predicted but load is also low, the array was just throttled (battery full / nothing to absorb it) — not a model error. The chart below turns this into an actual prediction-error signal.",
+ "Prediction error: produced − predicted (W)":"How wrong the forecast was, in watts — but only where it's meaningful. Green (above 0) = the panels produced MORE than predicted (model under-shot — always counted, they demonstrably made it). Red (below 0) = they produced LESS while the load clearly outran output, so the panels were maxed, not throttled (a true over-shot). Moments with low load, or where the controller simply wasn't pushed, are left blank: produced there doesn't reflect what the panels could do, so it isn't an error.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
@@ -696,14 +700,25 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
           histView?qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st):Promise.resolve(null),
           qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st) ]);   // house load
+        const availM=availVM?new Map(availVM.map(p=>[p[0],p[1]])):null; const avail=[];
+        for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null); if(a!=null)avail.push([t,a]); }
+        c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail},{...p.series[2],pts:ld||[]}]); }
+      else if(p.prederr){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // signed forecast error, but ONLY where produced reflects true capability
+        const [pv,availVM,ld]=await Promise.all([
+          qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
+          histView?qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st):Promise.resolve(null),
+          qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st) ]);
         const availM=availVM?new Map(availVM.map(p=>[p[0],p[1]])):null, ldM=new Map((ld||[]).map(p=>[p[0],p[1]]));
-        const avail=[], short=[];
+        const pos=[], neg=[];
         for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null);
-          if(a!=null){ avail.push([t,a]); const l=ldM.get(t)||0;
-            // load-gated shortfall: the load pulled MORE than the panels produced (so the array was maxed, not
-            // throttled) yet PV came in below the weather potential -> the panels/sun genuinely under-delivered.
-            if(a>200 && v<l && v<a*0.9) short.push([t,a]); } }
-        c.chart.setData([{...p.series[0],pts:pv,fill:1},{...p.series[1],pts:avail},{...p.series[2],pts:short},{...p.series[3],pts:ld||[]}]); }
+          if(a==null||a<150) continue; const l=ldM.get(t)||0, err=v-a;
+          // produced MORE than predicted -> model under-shot: always a real error (the panels demonstrably made it).
+          if(err>50) pos.push([t,err]);
+          // produced LESS, but only counts as error if the load clearly outran output (panels maxed, not throttled).
+          // low load / controller not covering => the array held back, so a gap there is NOT a model error -> skip.
+          else if(err<-50 && (l-v)>200) neg.push([t,err]);
+        }
+        c.chart.setData([{...p.series[0],pts:pos,fill:1},{...p.series[1],pts:neg,fill:1}]); }
       else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ if(histView) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // historical: real potential from the DB (backfilled weather)
         const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // recent: client weather-model available solar
         const ag=s.agg||p.agg||AGG; const w2=s.wx?Math.max(st,3900):aw; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${w2}s])`,from,to,st)}; })); c.chart.setData(series); }
