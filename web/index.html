@@ -80,7 +80,6 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 #tbCtrls::-webkit-scrollbar{height:5px}
 #tbCtrls>*{flex:0 0 auto}
 #tbCtrls .sp{flex:1 1 auto;min-width:.3rem}
-#tbLabel{font-weight:700;font-variant-numeric:tabular-nums;color:var(--text);white-space:nowrap}
 #tbHint{color:var(--muted);font-size:.68rem}
 #tbStrip{position:relative;height:30px;background:linear-gradient(var(--panel2),var(--panel));border:1px solid var(--border);border-radius:.55rem;cursor:crosshair;overflow:hidden;touch-action:none;user-select:none;box-shadow:inset 0 1px 4px rgba(0,0,0,.1)}
 #tbTicks{position:absolute;inset:0;pointer-events:none}
@@ -95,7 +94,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .tbH[data-h=l]{left:-7px}.tbH[data-h=r]{right:-7px}
 #tbAxis{position:relative;height:11px;font-size:.6rem;color:var(--muted);font-variant-numeric:tabular-nums}
 #tbAxis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
-#timebar .popover{top:auto;bottom:calc(100% + 6px);left:0;right:auto}
+#popover{position:fixed;z-index:40;top:auto;right:auto}
 body{padding-bottom:96px}
 </style>
 </head>
@@ -128,8 +127,7 @@ body{padding-bottom:96px}
     <div class="seg" id="presets">
       <button data-dur="900">15m</button><button data-dur="3600">1h</button><button data-dur="21600" class="on">6h</button><button data-dur="86400">24h</button><button data-dur="604800">7d</button><button data-dur="2592000">30d</button><button data-dur="31536000">1y</button><button data-today="1">Today</button>
     </div>
-    <span class="rel"><button class="iconbtn" id="customBtn" title="Pick a date range">📅</button>
-      <div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom"><label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div></span>
+    <button class="iconbtn" id="customBtn" title="Custom period — pick dates">Custom</button>
     <div class="seg" id="shiftSel" title="Shift the visible window (keeps the same zoom)">
       <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button><button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
     </div>
@@ -138,13 +136,13 @@ body{padding-bottom:96px}
     </div>
     <button class="iconbtn" id="tbOut" title="Zoom out (2×)">🔍−</button><button class="iconbtn" id="tbIn" title="Zoom in (½×)">🔍+</button>
     <span class="sp"></span>
-    <span id="tbLabel"></span>
     <div class="seg" id="refreshSel"><button data-ms="0">⏸</button><button data-ms="10000">10s</button><button data-ms="30000" class="on">30s</button><button data-ms="60000">1m</button></div>
     <button class="iconbtn" id="refreshNow" title="Refresh now">⟳</button>
   </div>
   <div id="tbStrip"><div id="tbTicks"></div><div id="tbNow"></div><div id="tbWin"><i class="tbH" data-h="l"></i><i class="tbH" data-h="r"></i></div></div>
   <div id="tbAxis"></div>
 </div>
+<div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom"><label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div>
 
 <script>
 "use strict";
@@ -840,7 +838,7 @@ function isLive(){ return state.kind==="preset" || state.kind==="today" || (stat
 function tick(){ if(isLive()) refresh(); }   // auto-refresh skips static (past) custom ranges
 function fmtDT(t){ const d=new Date(t),p=n=>String(n).padStart(2,"0"); return p(d.getDate())+"."+p(d.getMonth()+1)+"."+d.getFullYear()+" "+p(d.getHours())+":"+p(d.getMinutes()); }
 // live (preset/today) -> calendar icon; a fixed picked period -> show the range text
-function updateCustomBtn(){ const b=document.getElementById("customBtn"); if(state.custom){ const r=range(); b.textContent=fmtDT(r.from)+" – "+fmtDT(r.to); b.style.fontSize=".72rem"; b.title="Custom period — click to change"; } else { b.textContent="📅"; b.style.fontSize=""; b.title="Pick a date range"; } }
+function updateCustomBtn(){ const b=document.getElementById("customBtn"); if(state.custom){ const r=range(); b.textContent=fmtDT(r.from)+" – "+fmtDT(r.to); b.style.fontSize=".72rem"; b.title="Custom period — click to change"; } else { b.textContent="Custom"; b.style.fontSize=""; b.title="Custom period — pick dates"; } }
 // undo/redo of the visible period (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z) — covers presets, calendar and chart drag-zoom
 let rangeHist=[], rangeIdx=-1;
 function snapState(){ return {kind:state.kind, dur:state.dur, abs:state.abs?{from:state.abs.from,to:state.abs.to}:null, custom:state.custom}; }
@@ -868,8 +866,7 @@ function tlContext(){ const {from,to}=range(), now=Date.now(), span=Math.max(to-
   const ctx=Math.max(span*6, 6*3600e3), end=Math.min(now, to+(ctx-span)/2); return {start:end-ctx, span:ctx}; }
 function tlBox(from,to,c){ const win=document.getElementById("tbWin"); if(!win)return;
   const L=Math.max(0,(from-c.start)/c.span), R=Math.min(1,(to-c.start)/c.span);
-  win.style.left=(L*100)+"%"; win.style.width=(Math.max(0,R-L)*100)+"%";
-  const lb=document.getElementById("tbLabel"); if(lb)lb.textContent=fmtDT(from)+" – "+fmtDT(to); }
+  win.style.left=(L*100)+"%"; win.style.width=(Math.max(0,R-L)*100)+"%"; }
 function tlTicks(from,to){ const span=to-from, off=new Date().getTimezoneOffset()*60000, p=n=>String(n).padStart(2,"0"),
     mo=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], maj=[], min=[],
     aM=(v,l)=>{ if(v>=from&&v<=to)maj.push({t:v,l}); }, am=v=>{ if(v>=from&&v<=to)min.push(v); },
@@ -902,7 +899,7 @@ function tlMove(e){ if(!tlDrag)return; tlMoved=true; const dt=(e.clientX-tlDrag.
   if(tlDrag.mode==="pan"){ let nf=from+dt, nt=to+dt; if(nt>now){nt=now; nf=now-(to-from);} from=nf; to=nt; }
   else if(tlDrag.mode==="l") from=Math.min(from+dt, to-minW);
   else if(tlDrag.mode==="r") to=Math.min(Math.max(to+dt, from+minW), now);
-  tlDrag.cur={from,to}; tlBox(from,to,TLCTX); }
+  tlDrag.cur={from,to}; tlBox(from,to,TLCTX); const cb=document.getElementById("customBtn"); if(cb){ cb.textContent=fmtDT(from)+" – "+fmtDT(to); cb.style.fontSize=".72rem"; } }
 function tlUp(){ removeEventListener("pointermove",tlMove); removeEventListener("pointerup",tlUp); const d=tlDrag; tlDrag=null; if(d&&d.cur) setAbs(Math.round(d.cur.from),Math.round(d.cur.to)); }
 function tlClick(e){ if(tlMoved){ tlMoved=false; return; }   // ignore the click that follows a drag
   if(e.target.closest("#tbWin"))return; const strip=document.getElementById("tbStrip"), rect=strip.getBoundingClientRect(), c=tlContext();
@@ -918,7 +915,7 @@ document.addEventListener("keydown",e=>{ if(!(e.metaKey||e.ctrlKey))return; if(/
 document.getElementById("refreshNow").addEventListener("click",refresh);
 document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
 const pop=document.getElementById("popover"),cbtn=document.getElementById("customBtn"); const toInput=ms=>new Date(ms-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
-cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); } pop.classList.toggle("open",open); cbtn.classList.toggle("on",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
+cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); const r=cbtn.getBoundingClientRect(); pop.style.left=Math.max(6,Math.min(r.left,innerWidth-240))+"px"; pop.style.bottom=(innerHeight-r.top+6)+"px"; } pop.classList.toggle("open",open); cbtn.classList.toggle("on",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
 document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); cbtn.classList.remove("on"); setAbs(f,t); } });
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
