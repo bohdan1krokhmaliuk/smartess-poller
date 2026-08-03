@@ -74,6 +74,16 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .banner{display:none; background:var(--bad); color:#fff; text-align:center; padding:.4rem; font-size:.82rem; font-weight:600}
 .banner.show{display:block}
 @media (max-width:820px){ .card{grid-column:span 6 !important} .card.chart,.card.info,.card.dual{grid-column:span 12 !important} }
+#timebar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:saturate(150%) blur(8px);border-top:1px solid var(--border);padding:.35rem clamp(.6rem,2vw,1.2rem) .5rem;display:flex;flex-direction:column;gap:.3rem}
+#tbCtrls{display:flex;align-items:center;gap:.4rem;font-size:.76rem}
+#tbCtrls .sp{flex:1 1 auto}
+#tbLabel{font-weight:600;font-variant-numeric:tabular-nums;color:var(--text)}
+#tbStrip{position:relative;height:24px;background:var(--panel2);border:1px solid var(--border);border-radius:.45rem;cursor:crosshair;overflow:hidden;touch-action:none;user-select:none}
+#tbWin{position:absolute;top:0;bottom:0;min-width:8px;box-sizing:border-box;background:color-mix(in srgb,var(--accent) 28%,transparent);border-left:2px solid var(--accent);border-right:2px solid var(--accent);cursor:grab}
+#tbWin:active{cursor:grabbing}
+.tbH{position:absolute;top:0;bottom:0;width:12px;cursor:ew-resize}
+.tbH[data-h=l]{left:-6px}.tbH[data-h=r]{right:-6px}
+body{padding-bottom:76px}
 </style>
 </head>
 <body>
@@ -97,6 +107,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
       <label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div></span>
   <div class="seg" id="shiftSel" title="Shift the visible window (keeps the same zoom)">
     <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button>
+    <button id="thisDayBtn" title="Whole current day (00:00–23:59)">Day</button>
     <button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
   </div>
   <div class="seg" id="refreshSel">
@@ -118,6 +129,17 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 </header>
 <div id="faultbar" style="display:none;margin:.5rem clamp(.6rem,2vw,1.2rem) 0;font-size:.82rem"></div>
 <main id="main"></main>
+<div id="timebar">
+  <div id="tbCtrls">
+    <button class="iconbtn" id="tbOut" title="Zoom out (2×)">🔍−</button>
+    <button class="iconbtn" id="tbIn" title="Zoom in (½×)">🔍+</button>
+    <span id="tbLabel"></span>
+    <span class="sp"></span>
+    <span style="color:var(--muted);font-size:.7rem">drag = pan · edges = resize · click = jump</span>
+    <button class="iconbtn" id="tbLive" title="Back to live (6h)">⏵ Live</button>
+  </div>
+  <div id="tbStrip"><div id="tbWin"><i class="tbH" data-h="l"></i><i class="tbH" data-h="r"></i></div></div>
+</div>
 
 <script>
 "use strict";
@@ -741,6 +763,7 @@ function renderSky(c){ const el=c.el;
   el.innerHTML=s; }
 
 async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{evalT,win}=windowSec();
+  try{ drawTimeline(); }catch(e){}
   const histView=to<now-2*86400000;   // whole visible window older than ~2 days -> historical (~5-min cloud data + backfilled weather)
   const aw=histView?Math.max(st,360):st;   // aggregate over >=6 min so every step point catches a sample -> lines stay visible when zoomed in; live data uses st unchanged
   { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
@@ -824,7 +847,40 @@ function applyHist(s){ state.kind=s.kind; state.dur=s.dur; state.abs=s.abs?{from
 function undoRange(){ if(rangeIdx>0){ rangeIdx--; applyHist(rangeHist[rangeIdx]); } }
 function redoRange(){ if(rangeIdx<rangeHist.length-1){ rangeIdx++; applyHist(rangeHist[rangeIdx]); } }
 document.querySelectorAll("#presets button").forEach(b=>b.addEventListener("click",()=>{ b.dataset.today?setToday():setPreset(+b.dataset.dur*1000); }));
-document.querySelectorAll("#shiftSel button").forEach(b=>b.addEventListener("click",()=>shiftRange(b.dataset.shift, +b.dataset.n)));
+document.querySelectorAll("#shiftSel button[data-shift]").forEach(b=>b.addEventListener("click",()=>shiftRange(b.dataset.shift, +b.dataset.n)));
+function setThisDay(){ const r=range(); const d=new Date((r.from+r.to)/2); d.setHours(0,0,0,0); const from=d.getTime(); setAbs(from, from+86400000-1); }   // whole day (00:00–23:59:59.999) of the day you're currently viewing
+document.getElementById("thisDayBtn").addEventListener("click",setThisDay);
+
+// ---------- bottom timeline brush (overview strip = ~6× the window so the handle stays grabbable at any zoom) ----------
+var TLCTX=null, tlDrag=null, tlMoved=false;
+function tlContext(){ const {from,to}=range(), now=Date.now(), span=Math.max(to-from,60e3);
+  const ctx=Math.max(span*6, 6*3600e3), end=Math.min(now, to+(ctx-span)/2); return {start:end-ctx, span:ctx}; }
+function tlBox(from,to,c){ const win=document.getElementById("tbWin"); if(!win)return;
+  const L=Math.max(0,(from-c.start)/c.span), R=Math.min(1,(to-c.start)/c.span);
+  win.style.left=(L*100)+"%"; win.style.width=(Math.max(0,R-L)*100)+"%";
+  const lb=document.getElementById("tbLabel"); if(lb)lb.textContent=fmtDT(from)+" – "+fmtDT(to); }
+function drawTimeline(){ if(tlDrag)return; TLCTX=tlContext(); const {from,to}=range(); tlBox(from,to,TLCTX); }
+function tlDown(e,mode){ e.preventDefault(); e.stopPropagation(); const {from,to}=range();
+  TLCTX=tlContext(); tlMoved=false; tlDrag={mode,px0:e.clientX,w:document.getElementById("tbStrip").getBoundingClientRect().width||1,from,to,cur:{from,to}};
+  addEventListener("pointermove",tlMove); addEventListener("pointerup",tlUp); }
+function tlMove(e){ if(!tlDrag)return; tlMoved=true; const dt=(e.clientX-tlDrag.px0)/tlDrag.w*TLCTX.span, now=Date.now(), minW=15*60e3;
+  let from=tlDrag.from, to=tlDrag.to;
+  if(tlDrag.mode==="pan"){ let nf=from+dt, nt=to+dt; if(nt>now){nt=now; nf=now-(to-from);} from=nf; to=nt; }
+  else if(tlDrag.mode==="l") from=Math.min(from+dt, to-minW);
+  else if(tlDrag.mode==="r") to=Math.min(Math.max(to+dt, from+minW), now);
+  tlDrag.cur={from,to}; tlBox(from,to,TLCTX); }
+function tlUp(){ removeEventListener("pointermove",tlMove); removeEventListener("pointerup",tlUp); const d=tlDrag; tlDrag=null; if(d&&d.cur) setAbs(Math.round(d.cur.from),Math.round(d.cur.to)); }
+function tlClick(e){ if(tlMoved){ tlMoved=false; return; }   // ignore the click that follows a drag
+  if(e.target.closest("#tbWin"))return; const strip=document.getElementById("tbStrip"), rect=strip.getBoundingClientRect(), c=tlContext();
+  const t=c.start+(e.clientX-rect.left)/(rect.width||1)*c.span, {from,to}=range(), half=(to-from)/2, now=Date.now();
+  let nf=t-half, nt=t+half; if(nt>now){nt=now; nf=now-(to-from);} setAbs(Math.round(nf),Math.round(nt)); }
+function tlZoom(f){ const {from,to}=range(), ctr=(from+to)/2, w=(to-from)*f, now=Date.now(); let nf=ctr-w/2, nt=ctr+w/2; if(nt>now){nt=now; nf=nt-w;} setAbs(Math.round(nf),Math.round(nt)); }
+document.getElementById("tbWin").addEventListener("pointerdown",e=>{ if(e.target.classList.contains("tbH"))return; tlDown(e,"pan"); });
+document.querySelectorAll(".tbH").forEach(h=>h.addEventListener("pointerdown",e=>tlDown(e,h.dataset.h)));
+document.getElementById("tbStrip").addEventListener("click",tlClick);
+document.getElementById("tbOut").addEventListener("click",()=>tlZoom(2));
+document.getElementById("tbIn").addEventListener("click",()=>tlZoom(0.5));
+document.getElementById("tbLive").addEventListener("click",()=>setPreset(21600*1000));
 document.addEventListener("keydown",e=>{ if(!(e.metaKey||e.ctrlKey))return; if(/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName||"")))return; const k=e.key.toLowerCase(); if(k==="z"){ e.preventDefault(); e.shiftKey?redoRange():undoRange(); } else if(k==="y"){ e.preventDefault(); redoRange(); } });
 document.getElementById("refreshNow").addEventListener("click",refresh);
 document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
