@@ -129,7 +129,10 @@ body{padding-bottom:96px}
     <span class="rel"><button class="iconbtn" id="customBtn" title="Pick a date range">📅</button>
       <div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom"><label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div></span>
     <div class="seg" id="shiftSel" title="Shift the visible window (keeps the same zoom)">
-      <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button><button id="thisDayBtn" title="Whole current day (00:00–23:59)">Day</button><button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
+      <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button><button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
+    </div>
+    <div class="seg" id="snapSel" title="Snap to the whole current day / week / month / year">
+      <button data-snap="day">Day</button><button data-snap="week">Week</button><button data-snap="month">Month</button><button data-snap="year">Year</button>
     </div>
     <button class="iconbtn" id="tbOut" title="Zoom out (2×)">🔍−</button><button class="iconbtn" id="tbIn" title="Zoom in (½×)">🔍+</button>
     <button class="iconbtn" id="tbLive" title="Back to live (6h)">⏵ Live</button>
@@ -849,8 +852,14 @@ function undoRange(){ if(rangeIdx>0){ rangeIdx--; applyHist(rangeHist[rangeIdx])
 function redoRange(){ if(rangeIdx<rangeHist.length-1){ rangeIdx++; applyHist(rangeHist[rangeIdx]); } }
 document.querySelectorAll("#presets button").forEach(b=>b.addEventListener("click",()=>{ b.dataset.today?setToday():setPreset(+b.dataset.dur*1000); }));
 document.querySelectorAll("#shiftSel button[data-shift]").forEach(b=>b.addEventListener("click",()=>shiftRange(b.dataset.shift, +b.dataset.n)));
-function setThisDay(){ const r=range(); const d=new Date((r.from+r.to)/2); d.setHours(0,0,0,0); const from=d.getTime(); setAbs(from, from+86400000-1); }   // whole day (00:00–23:59:59.999) of the day you're currently viewing
-document.getElementById("thisDayBtn").addEventListener("click",setThisDay);
+function setThisPeriod(unit){ const d=new Date((range().from+range().to)/2); d.setHours(0,0,0,0);   // snap to the whole current day/week/month/year around the period you're viewing
+  if(unit==="week") d.setDate(d.getDate()-((d.getDay()+6)%7));   // back to Monday
+  else if(unit==="month") d.setDate(1);
+  else if(unit==="year") d.setMonth(0,1);
+  const from=d.getTime(), e=new Date(from);   // end = start of the next period − 1 ms (DST-safe via Date arithmetic)
+  if(unit==="week") e.setDate(e.getDate()+7); else if(unit==="month") e.setMonth(e.getMonth()+1); else if(unit==="year") e.setFullYear(e.getFullYear()+1); else e.setDate(e.getDate()+1);
+  setAbs(from, e.getTime()-1); }
+document.querySelectorAll("#snapSel button").forEach(b=>b.addEventListener("click",()=>setThisPeriod(b.dataset.snap)));
 
 // ---------- bottom timeline brush (overview strip = ~6× the window so the handle stays grabbable at any zoom) ----------
 var TLCTX=null, tlDrag=null, tlMoved=false;
