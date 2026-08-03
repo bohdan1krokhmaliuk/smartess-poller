@@ -998,6 +998,12 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 or p.startswith("/api/v1/series"))
 
     class Handler(http.server.BaseHTTPRequestHandler):
+        # Speak HTTP/1.1 with keep-alive. Every response below sets Content-Length, so this is
+        # safe — and it's what lets Caddy pool upstream connections. Under HTTP/1.0 the poller
+        # closed the socket after every reply, so Caddy kept grabbing a just-closed pooled
+        # connection under load and returning intermittent 502s. HTTP/1.1 fixes that at the root.
+        protocol_version = "HTTP/1.1"
+        timeout = 65                    # reap idle keep-alive connections so threads don't pile up
         def _reply(self, code, ctype, body):
             if isinstance(body, str):
                 body = body.encode("utf-8")
@@ -1163,7 +1169,10 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
         def log_message(self, *args):
             pass
 
-    httpd = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    class Server(http.server.ThreadingHTTPServer):
+        request_queue_size = 128        # deeper listen backlog to absorb bursts of new connections
+        daemon_threads = True
+    httpd = Server(("0.0.0.0", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     print("Web server on 0.0.0.0:%d  (dashboard /, /vm proxy, /control/<mode>)" % port)
 
