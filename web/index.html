@@ -91,6 +91,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .tbH[data-h=l]{left:-7px}.tbH[data-h=r]{right:-7px}
 #tbAxis{position:relative;height:11px;font-size:.6rem;color:var(--muted);font-variant-numeric:tabular-nums}
 #tbAxis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+#timebar .popover{top:auto;bottom:calc(100% + 6px);left:0;right:auto}
 body{padding-bottom:96px}
 </style>
 </head>
@@ -104,25 +105,6 @@ body{padding-bottom:96px}
     <button class="modebtn" data-mode="mirror" title="SmartESS app works">MIRROR</button>
   </div>
   <div class="spacer"></div>
-  <div class="seg" id="presets">
-    <button data-dur="900">15m</button><button data-dur="3600">1h</button>
-    <button data-dur="21600" class="on">6h</button><button data-dur="86400">24h</button>
-    <button data-dur="604800">7d</button><button data-dur="2592000">30d</button>
-    <button data-dur="31536000">1y</button><button data-today="1">Today</button>
-  </div>
-  <span class="rel"><button class="iconbtn" id="customBtn" title="Pick a date range">📅</button>
-    <div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom">
-      <label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div></span>
-  <div class="seg" id="shiftSel" title="Shift the visible window (keeps the same zoom)">
-    <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button>
-    <button id="thisDayBtn" title="Whole current day (00:00–23:59)">Day</button>
-    <button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
-  </div>
-  <div class="seg" id="refreshSel">
-    <button data-ms="0">⏸</button><button data-ms="10000">10s</button>
-    <button data-ms="30000" class="on">30s</button><button data-ms="60000">1m</button>
-  </div>
-  <button class="iconbtn" id="refreshNow" title="Refresh now">⟳</button>
   <span class="rel"><button class="iconbtn" id="cfgBtn" title="Settings">⚙</button>
     <div class="popover" id="cfgPop"><label>Tariff (per kWh)</label><input type="number" step="0.01" id="tariff">
       <label>Currency</label><input type="text" id="currency" maxlength="4">
@@ -139,12 +121,20 @@ body{padding-bottom:96px}
 <main id="main"></main>
 <div id="timebar">
   <div id="tbCtrls">
-    <button class="iconbtn" id="tbOut" title="Zoom out (2×)">🔍−</button>
-    <button class="iconbtn" id="tbIn" title="Zoom in (½×)">🔍+</button>
-    <span id="tbLabel"></span>
-    <span class="sp"></span>
-    <span id="tbHint">drag = pan · edges = resize · click = jump</span>
+    <div class="seg" id="presets">
+      <button data-dur="900">15m</button><button data-dur="3600">1h</button><button data-dur="21600" class="on">6h</button><button data-dur="86400">24h</button><button data-dur="604800">7d</button><button data-dur="2592000">30d</button><button data-dur="31536000">1y</button><button data-today="1">Today</button>
+    </div>
+    <span class="rel"><button class="iconbtn" id="customBtn" title="Pick a date range">📅</button>
+      <div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom"><label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div></span>
+    <div class="seg" id="shiftSel" title="Shift the visible window (keeps the same zoom)">
+      <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button><button id="thisDayBtn" title="Whole current day (00:00–23:59)">Day</button><button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
+    </div>
+    <button class="iconbtn" id="tbOut" title="Zoom out (2×)">🔍−</button><button class="iconbtn" id="tbIn" title="Zoom in (½×)">🔍+</button>
     <button class="iconbtn" id="tbLive" title="Back to live (6h)">⏵ Live</button>
+    <span class="sp"></span>
+    <span id="tbLabel"></span>
+    <div class="seg" id="refreshSel"><button data-ms="0">⏸</button><button data-ms="10000">10s</button><button data-ms="30000" class="on">30s</button><button data-ms="60000">1m</button></div>
+    <button class="iconbtn" id="refreshNow" title="Refresh now">⟳</button>
   </div>
   <div id="tbStrip"><div id="tbTicks"></div><div id="tbNow"></div><div id="tbWin"><i class="tbH" data-h="l"></i><i class="tbH" data-h="r"></i></div></div>
   <div id="tbAxis"></div>
