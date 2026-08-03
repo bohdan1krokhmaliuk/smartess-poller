@@ -144,6 +144,7 @@ function renderRef(){
 // all QPIWS warning bits the poller can report, with severity + a one-line meaning
 const QPIWS_FAULT=new Set(["inverter_fault","bus_over","bus_under","bus_soft_fail","opv_short","inverter_voltage_low","inverter_voltage_high","inverter_over_current","inverter_soft_fail","self_test_fail","op_dc_over_voltage","battery_open","current_sensor_fail","battery_short","mppt_overload_fault","battery_under_shutdown","over_temperature"]);
 const WREF=[
+ ["pv_loss","Зникло сонце / немає входу від панелей (PV Loss)"],
  ["inverter_fault","Загальна аварія — інвертор зупинив вихід"],["bus_over","Напруга DC-шини перевищила ліміт"],
  ["bus_under","Напруга DC-шини нижча за ліміт"],["bus_soft_fail","Не вдався плавний старт DC-шини"],
  ["line_fail","Мережа зникла/поза межами — перехід на батарею"],["opv_short","Коротке замикання на виході"],
@@ -161,7 +162,7 @@ const WREF=[
 ];
 function renderWref(){
   document.getElementById("wrefbody").innerHTML=WREF.map(([n,m])=>{ const s=QPIWS_FAULT.has(n)?"fault":"warning",c=sevColor(s);
-    return `<tr><td>${wlabel(n)}</td><td><span class="lev"><span class="dot2" style="background:${c}"></span>${s==="fault"?"аварія":"попередження"}</span></td><td style="color:var(--muted)">${m}</td></tr>`; }).join("");
+    return `<tr><td>${wlabel(n)} <code style="color:var(--muted);font-size:.82em">${n}</code></td><td><span class="lev"><span class="dot2" style="background:${c}"></span>${s==="fault"?"аварія":"попередження"}</span></td><td style="color:var(--muted)">${m}</td></tr>`; }).join("");
 }
 
 async function load(){

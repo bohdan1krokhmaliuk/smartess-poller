@@ -482,6 +482,7 @@ QPIGS_STATUS2_BITS = {
 }
 # QPIWS warning/fault bit positions (index in the returned bit string) -> name.
 QPIWS_BITS = {
+    0: "pv_loss",               # bit 0 = PV Loss (no solar input) — confirmed via the DessMonitor alarm log
     1: "inverter_fault", 2: "bus_over", 3: "bus_under", 4: "bus_soft_fail",
     5: "line_fail", 6: "opv_short", 7: "inverter_voltage_low",
     8: "inverter_voltage_high", 9: "over_temperature", 10: "fan_locked",
