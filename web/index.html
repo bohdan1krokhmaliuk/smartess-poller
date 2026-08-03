@@ -845,7 +845,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
   await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
-        const series=await Promise.all(p.series.map(async s=>{ const base=s.counter?`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000)`:``):`avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
+        const series=await Promise.all(p.series.map(async s=>{ const base=s.counter?`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (sum_over_time((${s.power})[${B}s:300s]) * 300/3600000)`:``):`sum_over_time((${s.power})[${B}s:300s]) * 300/3600000`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
       else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // available always from the DB (same source/window as the GTI chart) so the two can't diverge
         const [pv,availVM,ld]=await Promise.all([
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
