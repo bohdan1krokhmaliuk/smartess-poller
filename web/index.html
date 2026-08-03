@@ -738,8 +738,9 @@ function eKwh(counter,power,from,to){
     if(from>=to) return 0;
     const cS=await counterStart(counter); let sum=0;
     if(cS!=null && to>cS){ const a=await qInstant(`last_over_time(${counter}[2h])`,Math.max(from,cS)), b=await qInstant(`last_over_time(${counter}[2h])`,to); if(a!=null&&b!=null&&b>=a) sum+=b-a; }   // counter era → exact lifetime delta
-    const bfEnd=(cS!=null)?Math.min(to,cS):to;                                     // pre-counter (backfill) portion
-    const days=[]; for(let d=dayStart(from); d+86400000<=bfEnd; d+=86400000) days.push(d);   // full local days before the counter existed → per-day point-query integral
+    const days=[];   // pre-counter (backfill) days → per-day point-query integral
+    if(cS!=null && cS<to){ for(let d=dayStart(from); d+86400000<=cS; d+=86400000) days.push(d); }   // straddle: only full days before the counter start (the counter covers the rest — avoids a double count)
+    else { for(let d=dayStart(from); d<to; d+=86400000) days.push(d); }                              // fully pre-counter: every overlapping local day (a single day whose `to` is 23:59:59.999 still counts)
     if(days.length) sum+=(await Promise.all(days.map(d=>dayKwh(power,d)))).reduce((x,y)=>x+y,0);
     return sum;
   })();
