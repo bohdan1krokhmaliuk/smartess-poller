@@ -726,10 +726,11 @@ function tempAt(ms){ if(!WEATHER)return null; const h=WEATHER.tempH; const cur=W
 const PVPOW="inverter_pv_input_voltage*inverter_pv_input_current";
 const _cStart=new Map();   // counter -> earliest timestamp (ms); it never changes, so cache forever
 async function counterStart(c){ if(_cStart.has(c))return _cStart.get(c); const ts=await qInstant(`min_over_time(timestamp(${c})[420d:3h])`,Date.now()); const ms=(ts!=null)?ts*1000:null; _cStart.set(c,ms); return ms; }
-const _dayKwh=new Map();   // powerExpr|dayStart -> Promise<kWh>; completed past days are immutable → cache forever
-function dayKwh(power,ds){ const k=power+"|"+ds; if(_dayKwh.has(k))return _dayKwh.get(k);
-  const job=qInstant(`integrate((${power})[86400s])/3.6e6`, ds+86400000).then(v=>(v!=null&&v>0)?v:0);   // POINT query at the day's local end (a range step would decimate the integral)
-  if(ds+86400000<=Date.now()) _dayKwh.set(k,job); return job; }
+const _seg=new Map();   // powerExpr|dayStart -> Promise<kWh>, cached only for whole immutable past days
+function segKwh(power,s,e){ if(e<=s) return Promise.resolve(0); const ds=dayStart(s), full=(s===ds&&e===ds+86400000), key=full?power+"|"+ds:null;
+  if(key&&_seg.has(key)) return _seg.get(key);
+  const job=qInstant(`integrate((${power})[${Math.round((e-s)/1000)}s])/3.6e6`, e).then(v=>(v!=null&&v>0)?v:0);   // POINT query over exactly [s,e] (a range step would decimate the integral)
+  if(key&&e<=Date.now()) _seg.set(key,job); return job; }
 let _eMemo=new Map(), _eMemoKey="";
 function eKwh(counter,power,from,to){
   const rk=from+"|"+to; if(rk!==_eMemoKey){ _eMemo=new Map(); _eMemoKey=rk; }     // one refresh shares from/to → memoise per counter
@@ -738,10 +739,9 @@ function eKwh(counter,power,from,to){
     if(from>=to) return 0;
     const cS=await counterStart(counter); let sum=0;
     if(cS!=null && to>cS){ const a=await qInstant(`last_over_time(${counter}[2h])`,Math.max(from,cS)), b=await qInstant(`last_over_time(${counter}[2h])`,to); if(a!=null&&b!=null&&b>=a) sum+=b-a; }   // counter era → exact lifetime delta
-    const days=[];   // pre-counter (backfill) days → per-day point-query integral
-    if(cS!=null && cS<to){ for(let d=dayStart(from); d+86400000<=cS; d+=86400000) days.push(d); }   // straddle: only full days before the counter start (the counter covers the rest — avoids a double count)
-    else { for(let d=dayStart(from); d<to; d+=86400000) days.push(d); }                              // fully pre-counter: every overlapping local day (a single day whose `to` is 23:59:59.999 still counts)
-    if(days.length) sum+=(await Promise.all(days.map(d=>dayKwh(power,d)))).reduce((x,y)=>x+y,0);
+    const capEnd=(cS!=null&&cS<to)?cS:to, segs=[];   // pre-counter portion ends where the counter takes over (or at `to`)
+    for(let d=dayStart(from); d<capEnd; d+=86400000){ const s=Math.max(d,from), e=Math.min(d+86400000,capEnd); if(e>s) segs.push([s,e]); }   // one segment per local day, CLIPPED to the window — an edge day only counts its overlap, so a window that spills into the previous day no longer adds that whole day
+    if(segs.length) sum+=(await Promise.all(segs.map(([s,e])=>segKwh(power,s,e)))).reduce((x,y)=>x+y,0);
     return sum;
   })();
   _eMemo.set(counter,job); return job;
