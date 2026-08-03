@@ -474,11 +474,18 @@ let CONN=true;
 function conn(ok){ if(ok!==CONN){ CONN=ok; document.getElementById("banner").classList.toggle("show",!ok); } }
 let RCTL=null, RSIG=null;   // aborts a refresh's still-running fetches when the period changes again (rapid nav)
 function rotateAbort(){ try{ if(RCTL)RCTL.abort(); }catch(e){} RCTL=(typeof AbortController!=="undefined")?new AbortController():null; RSIG=RCTL?RCTL.signal:null; }
-async function qInstant(expr,atMs){ try{ const r=await fetch(`${VM}/query?query=${encodeURIComponent(expr)}&time=${Math.round(atMs/1000)}`, RSIG?{signal:RSIG}:undefined);
-  const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return null; const v=parseFloat(res[0].value[1]); return isFinite(v)?v:null; }catch(e){ conn(false); return undefined; } }
-async function qRange(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${st}`, RSIG?{signal:RSIG}:undefined);
-  const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return []; let best=res[0]; for(const s of res)if(s.values.length>best.values.length)best=s;
-  return best.values.map(p=>[p[0]*1000,parseFloat(p[1])]).filter(p=>isFinite(p[1])); }catch(e){ conn(false); return []; } }
+// batch every VM query fired within one tick into a single /vmq POST; the poller runs them concurrently against
+// localhost VM. Falls back to direct /vm requests if /vmq is unavailable or errors, so it degrades gracefully.
+let _bq=[], _bqOn=false;
+function vmq(spec){ return new Promise(res=>{ _bq.push([spec,res]); if(!_bqOn){ _bqOn=true; Promise.resolve().then(flushVmq); } }); }
+async function directQ(spec,sig){ const u=spec.t!==undefined?`${VM}/query?query=${encodeURIComponent(spec.q)}&time=${spec.t}`:`${VM}/query_range?query=${encodeURIComponent(spec.q)}&start=${spec.a}&end=${spec.b}&step=${spec.s}`; const r=await fetch(u, sig?{signal:sig}:undefined); const j=await r.json(); return (j.data&&j.data.result)||[]; }
+async function flushVmq(){ const items=_bq; _bq=[]; _bqOn=false; const sig=RSIG;
+  try{ const r=await fetch(`/vmq`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(items.map(i=>i[0])),signal:sig||undefined});
+    if(!r.ok) throw new Error(r.status); const arr=await r.json(); conn(true); items.forEach((it,i)=>it[1](Array.isArray(arr)?(arr[i]||null):null)); }
+  catch(e){ if(e&&e.name==="AbortError"){ items.forEach(it=>it[1](null)); return; }
+    await Promise.all(items.map(async it=>{ try{ it[1](await directQ(it[0],sig)); conn(true); }catch(_){ conn(false); it[1](null); } })); } }   // fallback: direct /vm (covers a poller without /vmq)
+async function qInstant(expr,atMs){ const res=await vmq({q:expr,t:Math.round(atMs/1000)}); if(!res||!res.length)return null; const v=parseFloat(res[0].value[1]); return isFinite(v)?v:null; }
+async function qRange(expr,from,to,st){ const res=await vmq({q:expr,a:Math.round(from/1000),b:Math.round(to/1000),s:st}); if(!res||!res.length)return []; let best=res[0]; for(const s of res)if(s.values.length>best.values.length)best=s; return best.values.map(p=>[p[0]*1000,parseFloat(p[1])]).filter(p=>isFinite(p[1])); }
 
 const state={ kind:"preset", dur:21600*1000, abs:null, autoMs:30000, timer:null };
 function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:to-state.dur,to}; }

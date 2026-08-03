@@ -27,6 +27,7 @@ Environment variables (SMARTESS_*) override both. No code editing required.
 """
 
 import calendar
+import concurrent.futures
 import configparser
 import http.server
 import json
@@ -1147,6 +1148,29 @@ def period_energy(key, frm, to):
     return total
 
 
+# ---- batched VM queries ----
+# The dashboard sends every query it needs for a refresh in ONE POST; we run them concurrently against the
+# local VM (the browser is capped at ~6 connections, the Pi isn't) and return the results in the same order.
+_VMQ_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+
+def _vmq_one(spec):
+    try:
+        q = spec.get("q")
+        if not isinstance(q, str) or not q or len(q) > 4000:
+            return None
+        if "t" in spec:                                  # instant query
+            params = "query?query=%s&time=%d" % (urllib.parse.quote(q), int(spec["t"]))
+        else:                                            # range query
+            params = ("query_range?query=%s&start=%d&end=%d&step=%d"
+                      % (urllib.parse.quote(q), int(spec["a"]), int(spec["b"]), int(spec["s"])))
+        return _en_get(params).get("data", {}).get("result") or []
+    except Exception:
+        return None
+
+def _vmq_run(specs):
+    return list(_VMQ_POOL.map(_vmq_one, specs))
+
+
 def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
     """Lightweight web server: serves the static dashboard (web/index.html),
     proxies read-only VictoriaMetrics queries (/vm/...), and toggles the mode
@@ -1372,6 +1396,19 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                         json.dump(data, f)
                     os.replace(tmp, SETTINGS_FILE)
                     self._reply(200, "application/json", json.dumps({"ok": True}))
+                except Exception as e:
+                    self._reply(400, "application/json", json.dumps({"error": str(e)}))
+                return
+
+            if path == "/vmq":                          # batched VM queries → run concurrently, return aligned results
+                try:
+                    n = int(self.headers.get("Content-Length", 0) or 0)
+                    if n <= 0 or n > 262144:
+                        raise ValueError("bad length")
+                    specs = json.loads(self.rfile.read(n).decode("utf-8"))
+                    if not isinstance(specs, list) or len(specs) > 256:
+                        raise ValueError("expected a list of <=256 queries")
+                    self._reply(200, "application/json", json.dumps(_vmq_run(specs)))
                 except Exception as e:
                     self._reply(400, "application/json", json.dumps({"error": str(e)}))
                 return
