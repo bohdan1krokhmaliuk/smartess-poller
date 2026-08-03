@@ -115,7 +115,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
   <a class="iconbtn" href="/inverter.html" title="Inverter settings (read-only)" style="text-decoration:none">🎛️</a>
   <button class="iconbtn" id="themeBtn" title="Toggle theme">🌙</button>
 </header>
-<div id="faultbar" style="display:none;margin:.5rem clamp(.6rem,2vw,1.2rem) 0;padding:.55rem .85rem;border-radius:.6rem;background:color-mix(in srgb,var(--bad) 15%,transparent);border:1px solid var(--bad);color:var(--bad);font-size:.82rem;font-weight:600"></div>
+<div id="faultbar" style="display:none;margin:.5rem clamp(.6rem,2vw,1.2rem) 0;font-size:.82rem"></div>
 <main id="main"></main>
 
 <script>
@@ -711,12 +711,34 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
-  { try{ const w=await (await fetch("/warnings")).json(); const fb=document.getElementById("faultbar");
-    if(w&&w.active&&w.active.length){ fb.style.display="block"; fb.textContent="⚠ Інвертор — активні попередження/аварії: "+w.active.join(", "); }
-    else fb.style.display="none"; }catch(e){} }
+  { try{ const [w,hist]=await Promise.all([fetch("/warnings").then(r=>r.json()),fetch("/warnings/history").then(r=>r.json()).catch(()=>[])]); renderFaults(w,hist); }catch(e){} }
   { const tg=document.getElementById("bmsToggle"); if(tg){ const fresh=await qInstant("bms_soc and (time()-timestamp(bms_soc) < 90)",Date.now()); const on=fresh!=null; tg.dataset.on=on?"1":"0"; tg.textContent="⏻ BMS"; tg.style.color=on?"var(--good)":"var(--muted)"; tg.style.borderColor=on?"var(--good)":"var(--grid)"; } }
   { const bt=document.getElementById("battModeToggle"); if(bt && bt.textContent!=="⏳"){ try{ const j=await (await fetch("/battery")).json(); applyBattMode(j.battery_mode); }catch(e){} } }
   loadMode();
+}
+
+// --- inverter warnings/faults: current state (coloured by severity) + collapsible history ---
+let FAULTHIST_OPEN=false;
+const WLABEL={inverter_fault:"Аварія інвертора",bus_over:"Перенапруга шини",bus_under:"Просадка шини",bus_soft_fail:"Збій старту шини",line_fail:"Немає мережі",opv_short:"КЗ на виході",inverter_voltage_low:"Низька напруга інвертора",inverter_voltage_high:"Висока напруга інвертора",over_temperature:"Перегрів",fan_locked:"Заклинив вентилятор",battery_voltage_high:"Висока напруга АКБ",battery_low_alarm:"Низький заряд АКБ",battery_under_shutdown:"Відключення: розряд АКБ",over_load:"Перевантаження",eeprom_fault:"Збій EEPROM",inverter_over_current:"Надструм інвертора",inverter_soft_fail:"Збій м'якого старту",self_test_fail:"Збій самотесту",op_dc_over_voltage:"DC на AC-виході",battery_open:"Обрив АКБ",current_sensor_fail:"Збій датчика струму",battery_short:"КЗ АКБ",power_limit:"Обмеження потужності",pv_voltage_high:"Висока напруга PV",mppt_overload_fault:"MPPT перевантаження (аварія)",mppt_overload_warning:"MPPT перевантаження",battery_too_low_to_charge:"АКБ надто розряджена для заряду"};
+const wlabel=n=>WLABEL[n]||n.replace(/_/g," ");
+const sevColor=s=>s==="fault"?"var(--bad)":s==="warning"?"var(--warn)":"var(--good)";
+function renderFaults(w,hist){ const fb=document.getElementById("faultbar"),active=(w&&w.active)||[]; hist=hist||[];
+  if(!active.length&&!hist.length){ fb.style.display="none"; return; }
+  const level=active.length?(w.level||"warning"):"ok", bc=sevColor(level);
+  let head;
+  if(active.length){ const chips=active.map(a=>`<span style="display:inline-block;margin:1px 4px 1px 0;padding:1px 8px;border-radius:.5rem;background:color-mix(in srgb,${sevColor(a.severity)} 20%,transparent);color:${sevColor(a.severity)};border:1px solid ${sevColor(a.severity)}">${wlabel(a.name)}</span>`).join("");
+    head=`<b>⚠ Активні аварії — ${level==="fault"?"КРИТИЧНО":"попередження"}:</b> ${chips}`; }
+  else head=`<b style="color:var(--good)">✓ Немає активних аварій</b>`;
+  const tog=hist.length?` <a href="#" id="fhToggle" style="color:var(--muted);text-decoration:underline">🕘 історія (${hist.length})</a>`:"";
+  let body="";
+  if(FAULTHIST_OPEN&&hist.length){ const rows=hist.slice().reverse().map(e=>{ const d=new Date(e.ts*1000),
+      t=d.toLocaleString([],{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}),
+      names=(e.active||[]).map(a=>`<span style="color:${sevColor(a.severity)}">${wlabel(a.name)}</span>`).join(", ")||`<span style="color:var(--good)">усунено ✓</span>`;
+      return `<div style="padding:2px 0;border-top:1px solid var(--grid)"><span style="color:var(--muted)">${t}</span> <span style="color:${sevColor(e.level)}">●</span> ${names}</div>`; }).join("");
+    body=`<div style="margin-top:.4rem;max-height:200px;overflow-y:auto;font-weight:500">${rows}</div>`; }
+  fb.style.cssText=`display:block;margin:.5rem clamp(.6rem,2vw,1.2rem) 0;padding:.55rem .85rem;border-radius:.6rem;font-size:.82rem;font-weight:600;background:color-mix(in srgb,${bc} 12%,transparent);border:1px solid ${bc};color:var(--text)`;
+  fb.innerHTML=head+tog+body;
+  const tg=document.getElementById("fhToggle"); if(tg) tg.onclick=e=>{ e.preventDefault(); FAULTHIST_OPEN=!FAULTHIST_OPEN; renderFaults(w,hist); };
 }
 
 async function loadMode(){ try{ const j=await (await fetch("/control")).json(); setBadge(j.mode); }catch(e){} }

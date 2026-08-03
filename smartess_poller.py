@@ -169,7 +169,7 @@ RATED = {}
 # full parsed QPIRI snapshot (all fields + enum *_name), served read-only at /rated
 RATED_ALL = {}
 # latest decoded QPIWS warnings/faults, served at /warnings
-WARN = {"active": [], "raw": ""}
+WARN = {"active": [], "raw": "", "level": "ok"}
 # dashboard settings shared across clients (served/saved at /settings)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_settings.json")
 
@@ -309,6 +309,7 @@ def weather_loop(mc, topic):
 # so VictoriaMetrics keeps sparse change-points. State is persisted across
 # restarts so a poller restart alone doesn't fabricate a "change".
 RATED_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".rated_history.jsonl")
+WARN_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".warnings_history.jsonl")
 RATED_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".rated_state.json")
 _rated_state = {}
 _rated_lock = threading.Lock()
@@ -492,6 +493,20 @@ QPIWS_BITS = {
     27: "mppt_overload_fault", 28: "mppt_overload_warning",
     29: "battery_too_low_to_charge",
 }
+
+# Severity per QPIWS bit. "fault" = a protection tripped / inverter has (or is about to) stop —
+# needs attention now. "warning" = advisory or derating condition. Everything not listed is a warning.
+QPIWS_FAULTS = {
+    "inverter_fault", "bus_over", "bus_under", "bus_soft_fail", "opv_short",
+    "inverter_voltage_low", "inverter_voltage_high", "inverter_over_current",
+    "inverter_soft_fail", "self_test_fail", "op_dc_over_voltage", "battery_open",
+    "current_sensor_fail", "battery_short", "mppt_overload_fault",
+    "battery_under_shutdown", "over_temperature",
+}
+
+
+def qpiws_severity(name):
+    return "fault" if name in QPIWS_FAULTS else "warning"
 
 # ------------------------------------------------------------------------- framing
 _mid = [0x53]  # rolling message id; the dongle echoes it back in its reply
@@ -728,14 +743,34 @@ def publish_qpiri(mc, topic, text):
     mc.publish(topic + "rated_info", text, retain=True)
 
 
+_warn_last = [None]   # last active name-set; None until the first reading (avoids logging startup all-clear)
+
+
 def publish_qpiws(mc, topic, text):
-    """Parse QPIWS warning/fault bit string and publish active warnings."""
-    active = [name for idx, name in QPIWS_BITS.items()
+    """Parse QPIWS warning/fault bit string, publish active warnings, and log changes with severity."""
+    active = [{"name": name, "severity": qpiws_severity(name)}
+              for idx, name in sorted(QPIWS_BITS.items())
               if len(text) > idx and text[idx] == "1"]
-    WARN["active"], WARN["raw"] = active, text
-    mc.publish(topic + "warnings_active", ",".join(active) if active else "none", retain=True)
+    level = "fault" if any(a["severity"] == "fault" for a in active) else ("warning" if active else "ok")
+    names = [a["name"] for a in active]
+    WARN["active"], WARN["raw"], WARN["level"] = active, text, level
+    mc.publish(topic + "warnings_active", ",".join(names) if names else "none", retain=True)
     mc.publish(topic + "fault", "1" if active else "0", retain=True)
     mc.publish(topic + "warning_status_raw", text, retain=True)
+    # append a history event whenever the active set changes (but not the all-clear state at startup)
+    key = sorted(names)
+    if _warn_last[0] != key:
+        first = _warn_last[0] is None
+        _warn_last[0] = key
+        if not (first and not key):
+            event = {"ts": int(time.time()),
+                     "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                     "active": active, "level": level, "raw": text}
+            try:
+                with open(WARN_HISTORY_FILE, "a") as f:
+                    f.write(json.dumps(event) + "\n")
+            except Exception as e:
+                print(time.strftime("%H:%M:%S"), "warning history write failed:", e)
 
 
 def publish_qet(mc, topic, text):
@@ -1113,6 +1148,15 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
             if path == "/rated/history":               # settings change-log (JSONL -> array)
                 try:
                     with open(RATED_HISTORY_FILE) as f:
+                        events = [json.loads(ln) for ln in f if ln.strip()][-200:]
+                except Exception:
+                    events = []
+                self._reply(200, "application/json", json.dumps(events))
+                return
+
+            if path == "/warnings/history":            # warning/fault change-log (JSONL -> array)
+                try:
+                    with open(WARN_HISTORY_FILE) as f:
                         events = [json.loads(ln) for ln in f if ln.strip()][-200:]
                 except Exception:
                     events = []
