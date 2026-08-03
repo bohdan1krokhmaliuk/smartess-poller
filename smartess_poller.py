@@ -168,6 +168,8 @@ INFO = {}
 RATED = {}
 # full parsed QPIRI snapshot (all fields + enum *_name), served read-only at /rated
 RATED_ALL = {}
+# latest decoded QPIWS warnings/faults, served at /warnings
+WARN = {"active": [], "raw": ""}
 # dashboard settings shared across clients (served/saved at /settings)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_settings.json")
 
@@ -730,6 +732,7 @@ def publish_qpiws(mc, topic, text):
     """Parse QPIWS warning/fault bit string and publish active warnings."""
     active = [name for idx, name in QPIWS_BITS.items()
               if len(text) > idx and text[idx] == "1"]
+    WARN["active"], WARN["raw"] = active, text
     mc.publish(topic + "warnings_active", ",".join(active) if active else "none", retain=True)
     mc.publish(topic + "fault", "1" if active else "0", retain=True)
     mc.publish(topic + "warning_status_raw", text, retain=True)
@@ -1095,6 +1098,10 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
 
             if path == "/rated":                       # full QPIRI snapshot (read-only)
                 self._reply(200, "application/json", json.dumps(RATED_ALL))
+                return
+
+            if path == "/warnings":                     # decoded QPIWS warnings/faults (active + raw)
+                self._reply(200, "application/json", json.dumps(WARN))
                 return
 
             if path == "/rated/history":               # settings change-log (JSONL -> array)

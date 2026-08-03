@@ -115,6 +115,7 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
   <a class="iconbtn" href="/inverter.html" title="Inverter settings (read-only)" style="text-decoration:none">🎛️</a>
   <button class="iconbtn" id="themeBtn" title="Toggle theme">🌙</button>
 </header>
+<div id="faultbar" style="display:none;margin:.5rem clamp(.6rem,2vw,1.2rem) 0;padding:.55rem .85rem;border-radius:.6rem;background:color-mix(in srgb,var(--bad) 15%,transparent);border:1px solid var(--bad);color:var(--bad);font-size:.82rem;font-weight:600"></div>
 <main id="main"></main>
 
 <script>
@@ -704,6 +705,9 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
+  { try{ const w=await (await fetch("/warnings")).json(); const fb=document.getElementById("faultbar");
+    if(w&&w.active&&w.active.length){ fb.style.display="block"; fb.textContent="⚠ Інвертор — активні попередження/аварії: "+w.active.join(", "); }
+    else fb.style.display="none"; }catch(e){} }
   { const tg=document.getElementById("bmsToggle"); if(tg){ const fresh=await qInstant("bms_soc and (time()-timestamp(bms_soc) < 90)",Date.now()); const on=fresh!=null; tg.dataset.on=on?"1":"0"; tg.textContent="⏻ BMS"; tg.style.color=on?"var(--good)":"var(--muted)"; tg.style.borderColor=on?"var(--good)":"var(--grid)"; } }
   { const bt=document.getElementById("battModeToggle"); if(bt && bt.textContent!=="⏳"){ try{ const j=await (await fetch("/battery")).json(); applyBattMode(j.battery_mode); }catch(e){} } }
   loadMode();
