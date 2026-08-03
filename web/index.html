@@ -193,8 +193,9 @@ dv.savings=w=>`clamp_min((${dv.cons(w)})-(${dv.grid(w)}),0)*${TARIFF}`;
 dv.total=w=>`(${dv.cons(w)})*${TARIFF}`;
 // solar potential energy (kWh) from the weather ceiling, and how much of it was actually captured
 dv.potential=w=>`avg_over_time(weather_pv_potential_w[${w}s]) * ${w}/3600000`;
-dv.wasted=w=>`clamp_min((${dv.potential(w)}) - (${dv.pv(w)}), 0)`;
-dv.captured=w=>`clamp_max(100*(${dv.pv(w)})/(${dv.potential(w)}), 100)`;
+// "wasted"/"captured" are derived CLIENT-side (CLIENT.wastedKwh / capturedPct): subtracting
+// weather_* by inverter_* inside MetricsQL fails — the two carry different `topic` labels, so
+// VM rejects the binary op with 422 (surfaced as a 502 through the poller proxy).
 // "today" = delta of the monotonic lifetime counters since local midnight (robust to poller restarts;
 // matches the Energy tiles when the Today preset is selected). Ignores the passed window.
 const todaySec=()=>Math.max(60,Math.round((Date.now()-new Date().setHours(0,0,0,0))/1000));
@@ -238,8 +239,8 @@ const SECTIONS=[
  {name:"☀️ Solar potential vs used", note:"How much the sun offered vs what the array actually harvested over the selected range. The rest is lost (battery full / no export).", panels:[
    {t:"stat",title:"Potential",dyn:dv.potential,unit:"kWh",dec:1,span:3,th:[[0,"#3b82f6"]]},
    {t:"stat",title:"Produced",dyn:dv.pv,unit:"kWh",dec:1,span:3,th:[[0,C.pv]]},
-   {t:"stat",title:"Wasted",dyn:dv.wasted,unit:"kWh",dec:1,span:3,th:[[0,"var(--warn)"]]},
-   {t:"stat",title:"Captured",dyn:dv.captured,unit:"%",dec:0,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]]},
+   {t:"stat",title:"Wasted",client:"wastedKwh",unit:"kWh",dec:1,span:3,th:[[0,"var(--warn)"]]},
+   {t:"stat",title:"Captured",client:"capturedPct",unit:"%",dec:0,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]]},
  ]},
  {name:"📊 Power by source", panels:[
    {t:"chart",title:"Sources & load (W)",unit:"W",span:8,series:[
@@ -649,6 +650,10 @@ const CLIENT={
     for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
   solarTomorrow: async()=>{ if(pvPotentialW()==null)return null; const from=new Date().setHours(0,0,0,0)+864e5,to=from+864e5,step=300000; let wh=0;   // forecast solar potential for tomorrow (needs forecast_days=2)
     for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
+  // wasted = potential − produced, captured = produced/potential. Computed here (two separate
+  // single-metric queries, subtracted in JS) because doing it in MetricsQL 422s on label mismatch.
+  wastedKwh: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await qInstant(dv.pv(w),at); return p==null?null:Math.max(0,p-(q||0)); },
+  capturedPct: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await qInstant(dv.pv(w),at); return p?Math.min(100,100*(q||0)/p):null; },
 };
 
 function renderSky(c){ const el=c.el;
@@ -697,11 +702,12 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
         const ag=s.agg||p.agg||AGG; const w2=s.wx?Math.max(st,3900):aw; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${w2}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
-    else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?(p.now?now:evalT):now))); renderMulti(c); }
+    else if(p.t==="multi"){ c.last=await Promise.all(p.items.map(it=> it.client?CLIENT[it.client](win,evalT):qInstant(it.dyn?it.dyn(win):it.expr, it.dyn?(p.now?now:evalT):now))); renderMulti(c); }
     else if(p.t==="table"){ c.last=await Promise.all(p.rows.map(r=>Promise.all(r.cells.map(cell=>qInstant(cell.dyn?cell.dyn(win):cell.expr, cell.dyn?(p.now?now:evalT):now))))); renderTable(c); }
     else if(p.t==="cells"){ c.last=await Promise.all(Array.from({length:p.n},(_,i)=>qInstant(p.prefix+(i+1),now))); renderCells(c); }
     else if(p.t==="gauge"){ c.last=await qInstant(p.expr,now); if(p.optional)c.card.style.display=(c.last==null?"none":""); if(p.sub) c.subv=await qInstant(p.sub.dyn?p.sub.dyn(win):p.sub.expr, p.sub.dyn?evalT:now); if(p.maxExpr) c.maxv=await qInstant(p.maxExpr,now); renderGauge(c); }
     else if(p.t==="gauge2"){ c.last=await Promise.all(p.gauges.map(g=>qInstant(g.expr,now))); c.subv=await Promise.all(p.gauges.map(g=>g.sub?qInstant(g.sub.expr,now):null)); renderGauge2(c); }
+    else if(p.client){ c.last=await CLIENT[p.client](win,evalT); renderStat(c); }
     else { const expr=p.dyn?p.dyn(win):p.expr, at=p.dyn?evalT:now; c.last=await qInstant(expr,at); renderStat(c); }
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
