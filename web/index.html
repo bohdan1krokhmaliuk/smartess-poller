@@ -259,7 +259,7 @@ const SECTIONS=[
      {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
      {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
      {label:"Appx solar tomorrow",client:"solarTomorrow",unit:"kWh",dec:2,color:"#3b82f6"},
-     {label:"Model error now",client:"errNow",unit:"W",color:"var(--muted)"},
+     {label:"Prediction error today",client:"errPctToday",unit:"%",dec:0,color:"var(--muted)"},
      {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
      {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
    {t:"sky",title:"Sun path & sky",span:3},
@@ -662,10 +662,17 @@ const CLIENT={
     for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
   solarTomorrow: async()=>{ if(pvPotentialW()==null)return null; const from=new Date().setHours(0,0,0,0)+864e5,to=from+864e5,step=300000; let wh=0;   // forecast solar potential for tomorrow (needs forecast_days=2)
     for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
-  // current signed forecast error (same rule as the shaded chart): + = produced beat forecast, − = missed usable solar (capped by load)
-  errNow: async()=>{ const a=pvPotentialW(); if(a==null)return null; const v=await qInstant(M.pvpow,Date.now()); if(v==null)return null;
-    const l=(await qInstant("inverter_ac_output_active_power",Date.now()))||0, thr=l<500?250:100, ceil=Math.min(a,l);
-    if((l-v)<=thr)return 0; return v>a? v-a : v-ceil; },
+  // today's net forecast error over the measurable (maxed) periods, as a % — same rule as the shaded chart
+  // summed: (Σ produced − Σ min(predicted,load)) / Σ min(predicted,load).  − = model over-predicts, + = under-predicts
+  errPctToday: async()=>{ if(pvPotentialW()==null)return null;
+    const to=Date.now(), from=new Date().setHours(0,0,0,0), step=300;
+    const [pv,ld]=await Promise.all([qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step),
+      qRange(`avg_over_time((inverter_ac_output_active_power)[${step}s])`,from,to,step)]);
+    const ldM=new Map(ld.map(p=>[p[0],p[1]])); let sp=0,sc=0;
+    for(const [t,v] of pv){ const a=pvPotentialAt(new Date(t)); if(a==null||a<50)continue;
+      const l=ldM.get(t)||0, thr=l<500?250:100; if((l-v)<=thr)continue;   // only where the panels were maxed (measurable)
+      sp+=v; sc+=Math.min(a,l); }
+    return sc>0? 100*(sp-sc)/sc : null; },
   // wasted = potential − produced, captured = produced/potential. Computed here (two separate
   // single-metric queries, subtracted in JS) because doing it in MetricsQL 422s on label mismatch.
   wastedKwh: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await qInstant(dv.pv(w),at); return p==null?null:Math.max(0,p-(q||0)); },
