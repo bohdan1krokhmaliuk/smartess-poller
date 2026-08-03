@@ -477,11 +477,6 @@ async function qInstant(expr,atMs){ try{ const r=await fetch(`${VM}/query?query=
 async function qRange(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${st}`);
   const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return []; let best=res[0]; for(const s of res)if(s.values.length>best.values.length)best=s;
   return best.values.map(p=>[p[0]*1000,parseFloat(p[1])]).filter(p=>isFinite(p[1])); }catch(e){ conn(false); return []; } }
-// like qRange but merges ALL series (max per timestamp) — for exprs that yield >1 series (e.g. products across topics)
-async function qRangeMerged(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${st}`);
-  const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return []; const m=new Map();
-  for(const s of res)for(const [t,v] of s.values){ const f=parseFloat(v); if(isFinite(f)){ const T=t*1000; if(!m.has(T)||f>m.get(T))m.set(T,f); } }
-  return [...m.entries()].sort((a,b)=>a[0]-b[0]); }catch(e){ conn(false); return []; } }
 
 const state={ kind:"preset", dur:21600*1000, abs:null, autoMs:30000, timer:null };
 function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:to-state.dur,to}; }
@@ -724,25 +719,29 @@ function tempAt(ms){ if(!WEATHER)return null; const h=WEATHER.tempH; const cur=W
 
 // client-computed values (not from VM): PV headroom vs clear-sky potential
 // ---- reliable period energy (kWh) ----
-// Exact when the lifetime counter spans the whole window (c(to)-c(from)); otherwise a per-day sum. This fixes the
-// "counter boundary" bug: the old max_over_time-min_over_time silently covered only the counter era when a range
-// straddled the counter's start (e.g. "last month" showed just ~2 live days). Per-day integrals are reliable
-// (1-day windows), unlike integrate() over a whole month which is non-monotonic in this VM.
+// The lifetime counter is authoritative and robust to sparse sampling, so use it wherever it exists; only the
+// pre-counter (imported/backfill) days fall back to a per-DAY integral. Per-day integrals use POINT queries, never a
+// day-stepped range query: in a range query VM decimates the series to the step, so integrate/max/min/sum over a
+// window ≈ step see ~1 sample and return garbage — that was the "Produced = 0 for a single old day" bug.
 const PVPOW="inverter_pv_input_voltage*inverter_pv_input_current";
+const _cStart=new Map();   // counter -> earliest timestamp (ms); it never changes, so cache forever
+async function counterStart(c){ if(_cStart.has(c))return _cStart.get(c); const ts=await qInstant(`min_over_time(timestamp(${c})[420d:3h])`,Date.now()); const ms=(ts!=null)?ts*1000:null; _cStart.set(c,ms); return ms; }
+const _dayKwh=new Map();   // powerExpr|dayStart -> Promise<kWh>; completed past days are immutable → cache forever
+function dayKwh(power,ds){ const k=power+"|"+ds; if(_dayKwh.has(k))return _dayKwh.get(k);
+  const job=qInstant(`integrate((${power})[86400s])/3.6e6`, ds+86400000).then(v=>(v!=null&&v>0)?v:0);   // POINT query at the day's local end (a range step would decimate the integral)
+  if(ds+86400000<=Date.now()) _dayKwh.set(k,job); return job; }
 let _eMemo=new Map(), _eMemoKey="";
-async function eKwh(counter,power,from,to){
-  const key=from+"|"+to; if(key!==_eMemoKey){ _eMemo=new Map(); _eMemoKey=key; }     // one refresh shares from/to → memoise per counter
+function eKwh(counter,power,from,to){
+  const rk=from+"|"+to; if(rk!==_eMemoKey){ _eMemo=new Map(); _eMemoKey=rk; }     // one refresh shares from/to → memoise per counter
   if(_eMemo.has(counter)) return _eMemo.get(counter);
   const job=(async()=>{
-    const cFrom=await qInstant(`last_over_time(${counter}[2h])`,from), cTo=await qInstant(`last_over_time(${counter}[2h])`,to);
-    if(cFrom!=null&&cTo!=null&&cTo>=cFrom) return cTo-cFrom;                             // counter spans the window → exact, gap-robust
-    const mids=await qRangeMerged(`last_over_time(${counter}[1800s])`,from,to,86400);    // counter value at each local midnight
-    const integ=await qRangeMerged(`integrate((${power})[86400s])/3.6e6`,from,to,86400);// per-day 1-day integral (pre-counter/backfill days)
-    const day=new Map();
-    for(let i=0;i+1<mids.length;i++){ if(mids[i+1][0]-mids[i][0]>1.5*864e5)continue; const k=mids[i+1][1]-mids[i][1]; if(k>=0) day.set(dayStart(mids[i][0]),k); }  // counter delta between midnights (exact)
-    for(const [T,v] of integ){ const d=dayStart(T-12*3600e3); if(!day.has(d)&&v>0.02) day.set(d,v); }   // fill counter-less days with the integral
-    if(cTo!=null&&mids.length){ const L=mids[mids.length-1], dt=dayStart(to); if(!day.has(dt)&&cTo>=L[1]) day.set(dt,cTo-L[1]); }  // today's partial from the counter
-    let s=0; for(const [d,v] of day){ if(d>=dayStart(from)&&d<to) s+=v; } return s;
+    if(from>=to) return 0;
+    const cS=await counterStart(counter); let sum=0;
+    if(cS!=null && to>cS){ const a=await qInstant(`last_over_time(${counter}[2h])`,Math.max(from,cS)), b=await qInstant(`last_over_time(${counter}[2h])`,to); if(a!=null&&b!=null&&b>=a) sum+=b-a; }   // counter era → exact lifetime delta
+    const bfEnd=(cS!=null)?Math.min(to,cS):to;                                     // pre-counter (backfill) portion
+    const days=[]; for(let d=dayStart(from); d+86400000<=bfEnd; d+=86400000) days.push(d);   // full local days before the counter existed → per-day point-query integral
+    if(days.length) sum+=(await Promise.all(days.map(d=>dayKwh(power,d)))).reduce((x,y)=>x+y,0);
+    return sum;
   })();
   _eMemo.set(counter,job); return job;
 }
