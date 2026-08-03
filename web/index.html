@@ -983,8 +983,8 @@ function calPick(ds){ if(ds>dayStart(Date.now()))return;
   else { calSel={start:Math.min(calAnchor,ds), end:Math.max(calAnchor,ds)}; calAnchor=null; calSyncInputs(); }
   renderCal(); }
 const calGrid=document.getElementById("calGrid");
-calGrid.addEventListener("click",e=>{ const c=e.target.closest(".d"); if(c&&!c.classList.contains("fut"))calPick(+c.dataset.d); });
-calGrid.addEventListener("mouseover",e=>{ const c=e.target.closest(".d"); if(c&&calAnchor!=null){ calHover=+c.dataset.d; renderCal(); } });
+calGrid.addEventListener("click",e=>{ e.stopPropagation(); const c=e.target.closest(".d"); if(c&&!c.classList.contains("fut"))calPick(+c.dataset.d); });   // stop bubbling: renderCal() replaces the clicked node, so the global outside-click handler would otherwise see a detached target and close the popup
+calGrid.addEventListener("mouseover",e=>{ const c=e.target.closest(".d"); if(c&&calAnchor!=null){ const h=+c.dataset.d; if(h!==calHover){ calHover=h; renderCal(); } } });
 calGrid.addEventListener("mouseleave",()=>{ if(calAnchor!=null&&calHover!=null){ calHover=null; renderCal(); } });
 document.getElementById("calPrev").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()-1); renderCal(); });
 document.getElementById("calNext").addEventListener("click",()=>{ calView.setMonth(calView.getMonth()+1); renderCal(); });
