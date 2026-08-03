@@ -298,16 +298,16 @@ const SECTIONS=[
      {label:"Prediction error today",client:"errPctToday",unit:"%",dec:0,color:"var(--muted)"}]},
  ]},
  {name:"🔋 Energy", panels:[
-   {t:"stat",title:"Generated",dyn:dv.pv,unit:"kWh",dec:2,span:2},
-   {t:"stat",title:"Consumed",dyn:dv.cons,unit:"kWh",dec:2,span:2},
-   {t:"stat",title:"From battery",dyn:dv.bat,unit:"kWh",dec:2,span:2},
-   {t:"stat",title:"From grid",dyn:dv.grid,unit:"kWh",dec:2,span:2},
-   {t:"stat",title:"Self-sufficiency",dyn:dv.self,unit:"%",dec:0,span:2,th:[[0,"var(--warn)"],[50,"var(--good)"]]},
+   {t:"stat",title:"Generated",client:"genKwh",unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"Consumed",client:"consKwh",unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"From battery",client:"batKwh",unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"From grid",client:"gridKwh",unit:"kWh",dec:2,span:2},
+   {t:"stat",title:"Self-sufficiency",client:"selfPct",unit:"%",dec:0,span:2,th:[[0,"var(--warn)"],[50,"var(--good)"]]},
    {t:"stat",title:"PV total (life)",expr:M.pvtot,live:1,unit:"kWh",dec:1,span:2},
  ]},
  {name:"☀️ Solar potential vs used", note:"How much the sun offered vs what the array actually harvested over the selected range. The rest is lost (battery full / no export).", panels:[
    {t:"stat",title:"Potential",dyn:dv.potential,unit:"kWh",dec:1,span:3,th:[[0,"#3b82f6"]]},
-   {t:"stat",title:"Produced",dyn:dv.pv,unit:"kWh",dec:1,span:3,th:[[0,C.pv]]},
+   {t:"stat",title:"Produced",client:"genKwh",unit:"kWh",dec:1,span:3,th:[[0,C.pv]]},
    {t:"stat",title:"Wasted",client:"wastedKwh",unit:"kWh",dec:1,span:3,th:[[0,"var(--warn)"]]},
    {t:"stat",title:"Captured",client:"capturedPct",unit:"%",dec:0,span:3,th:[[0,"var(--bad)"],[30,"var(--warn)"],[60,"var(--good)"]]},
  ]},
@@ -380,9 +380,9 @@ const SECTIONS=[
  ]},
  {name:"💰 Cost", panels:[
    {t:"multi",title:"Cost",span:4,items:[
-     {label:"Total",dyn:dv.total,unit:"money",dec:2,color:"var(--text)"},
-     {label:"Grid",dyn:dv.gridCost,unit:"money",dec:2,color:C.grid},
-     {label:"Solar saved",dyn:dv.savings,unit:"money",dec:2,color:C.pv}]},
+     {label:"Total",client:"costTotal",unit:"money",dec:2,color:"var(--text)"},
+     {label:"Grid",client:"costGrid",unit:"money",dec:2,color:C.grid},
+     {label:"Solar saved",client:"costSaved",unit:"money",dec:2,color:C.pv}]},
    {t:"chart",kind:"bars",title:"Cost over time",unit:"money",span:8,series:[
      {counter:"energymeter_consumed_total",power:"inverter_ac_output_active_power",label:"total",color:C.cons,cost:1},
      {counter:"energymeter_grid_total",power:M.grid,label:"grid",color:C.grid,cost:1}]},
@@ -477,6 +477,11 @@ async function qInstant(expr,atMs){ try{ const r=await fetch(`${VM}/query?query=
 async function qRange(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${st}`);
   const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return []; let best=res[0]; for(const s of res)if(s.values.length>best.values.length)best=s;
   return best.values.map(p=>[p[0]*1000,parseFloat(p[1])]).filter(p=>isFinite(p[1])); }catch(e){ conn(false); return []; } }
+// like qRange but merges ALL series (max per timestamp) — for exprs that yield >1 series (e.g. products across topics)
+async function qRangeMerged(expr,from,to,st){ try{ const r=await fetch(`${VM}/query_range?query=${encodeURIComponent(expr)}&start=${Math.round(from/1000)}&end=${Math.round(to/1000)}&step=${st}`);
+  const j=await r.json(); conn(true); const res=j.data&&j.data.result; if(!res||!res.length)return []; const m=new Map();
+  for(const s of res)for(const [t,v] of s.values){ const f=parseFloat(v); if(isFinite(f)){ const T=t*1000; if(!m.has(T)||f>m.get(T))m.set(T,f); } }
+  return [...m.entries()].sort((a,b)=>a[0]-b[0]); }catch(e){ conn(false); return []; } }
 
 const state={ kind:"preset", dur:21600*1000, abs:null, autoMs:30000, timer:null };
 function range(){ if(state.kind==="preset"){ const to=Date.now(); return {from:to-state.dur,to}; }
@@ -718,6 +723,29 @@ function tempAt(ms){ if(!WEATHER)return null; const h=WEATHER.tempH; const cur=W
   for(let i=1;i<h.length;i++){ if(h[i][0]>=ms){ const[t0,v0]=h[i-1],[t1,v1]=h[i]; if(v0==null||v1==null)return v0==null?v1:v0; return v0+(v1-v0)*(ms-t0)/(t1-t0||1); } } return cur; }
 
 // client-computed values (not from VM): PV headroom vs clear-sky potential
+// ---- reliable period energy (kWh) ----
+// Exact when the lifetime counter spans the whole window (c(to)-c(from)); otherwise a per-day sum. This fixes the
+// "counter boundary" bug: the old max_over_time-min_over_time silently covered only the counter era when a range
+// straddled the counter's start (e.g. "last month" showed just ~2 live days). Per-day integrals are reliable
+// (1-day windows), unlike integrate() over a whole month which is non-monotonic in this VM.
+const PVPOW="inverter_pv_input_voltage*inverter_pv_input_current";
+let _eMemo=new Map(), _eMemoKey="";
+async function eKwh(counter,power,from,to){
+  const key=from+"|"+to; if(key!==_eMemoKey){ _eMemo=new Map(); _eMemoKey=key; }     // one refresh shares from/to → memoise per counter
+  if(_eMemo.has(counter)) return _eMemo.get(counter);
+  const job=(async()=>{
+    const cFrom=await qInstant(`last_over_time(${counter}[2h])`,from), cTo=await qInstant(`last_over_time(${counter}[2h])`,to);
+    if(cFrom!=null&&cTo!=null&&cTo>=cFrom) return cTo-cFrom;                             // counter spans the window → exact, gap-robust
+    const mids=await qRangeMerged(`last_over_time(${counter}[1800s])`,from,to,86400);    // counter value at each local midnight
+    const integ=await qRangeMerged(`integrate((${power})[86400s])/3.6e6`,from,to,86400);// per-day 1-day integral (pre-counter/backfill days)
+    const day=new Map();
+    for(let i=0;i+1<mids.length;i++){ if(mids[i+1][0]-mids[i][0]>1.5*864e5)continue; const k=mids[i+1][1]-mids[i][1]; if(k>=0) day.set(dayStart(mids[i][0]),k); }  // counter delta between midnights (exact)
+    for(const [T,v] of integ){ const d=dayStart(T-12*3600e3); if(!day.has(d)&&v>0.02) day.set(d,v); }   // fill counter-less days with the integral
+    if(cTo!=null&&mids.length){ const L=mids[mids.length-1], dt=dayStart(to); if(!day.has(dt)&&cTo>=L[1]) day.set(dt,cTo-L[1]); }  // today's partial from the counter
+    let s=0; for(const [d,v] of day){ if(d>=dayStart(from)&&d<to) s+=v; } return s;
+  })();
+  _eMemo.set(counter,job); return job;
+}
 const CLIENT={
   availNow: async()=> pvPotentialW(),
   spareNow: async()=>{ const a=pvPotentialW(); if(a==null)return null; const pv=await qInstant(M.pvpow,Date.now()); return (pv==null)?null:Math.max(0,a-pv); },
@@ -770,8 +798,17 @@ const CLIENT={
     return den>0? 100*num/den : null; },
   // wasted = potential − produced, captured = produced/potential. Computed here (two separate
   // single-metric queries, subtracted in JS) because doing it in MetricsQL 422s on label mismatch.
-  wastedKwh: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await qInstant(dv.pv(w),at); return p==null?null:Math.max(0,p-(q||0)); },
-  capturedPct: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await qInstant(dv.pv(w),at); return p?Math.min(100,100*(q||0)/p):null; },
+  wastedKwh: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await CLIENT.genKwh(w,at); return p==null?null:Math.max(0,p-(q||0)); },
+  capturedPct: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await CLIENT.genKwh(w,at); return p?Math.min(100,100*(q||0)/p):null; },
+  // period energy via eKwh (exact where the counter spans the window, per-day sum otherwise) — no more silently-dropped days
+  genKwh:  (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_pv_total",PVPOW,t-w*1000,t); },
+  consKwh: (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_consumed_total","inverter_ac_output_active_power",t-w*1000,t); },
+  batKwh:  (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_battery_out_total","inverter_battery_voltage*inverter_battery_discharge_current",t-w*1000,t); },
+  gridKwh: (w,at)=>{ const t=at||Date.now(); return eKwh("energymeter_grid_total",M.grid,t-w*1000,t); },
+  selfPct: async(w,at)=>{ const g=await CLIENT.genKwh(w,at), c=await CLIENT.consKwh(w,at); return (c&&c>0)?Math.min(100,100*(g||0)/c):null; },
+  costTotal: async(w,at)=>{ const c=await CLIENT.consKwh(w,at); return c==null?null:c*TARIFF; },
+  costGrid:  async(w,at)=>{ const g=await CLIENT.gridKwh(w,at); return g==null?null:g*TARIFF; },
+  costSaved: async(w,at)=>{ const c=await CLIENT.consKwh(w,at), g=await CLIENT.gridKwh(w,at); return c==null?null:Math.max(0,c-(g||0))*TARIFF; },
 };
 
 function renderSky(c){ const el=c.el;
