@@ -75,8 +75,10 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .banner.show{display:block}
 @media (max-width:820px){ .card{grid-column:span 6 !important} .card.chart,.card.info,.card.dual{grid-column:span 12 !important} }
 #timebar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:color-mix(in srgb,var(--bg) 93%,transparent);backdrop-filter:saturate(160%) blur(10px);border-top:1px solid var(--border);box-shadow:0 -2px 14px rgba(0,0,0,.09);padding:.4rem clamp(.6rem,2vw,1.2rem) .4rem;display:flex;flex-direction:column;gap:.28rem}
-#tbCtrls{display:flex;align-items:center;gap:.35rem .45rem;flex-wrap:wrap;font-size:.76rem}
-#tbCtrls .sp{flex:1 1 auto}
+#tbCtrls{display:flex;align-items:center;gap:.35rem .45rem;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;font-size:.76rem}
+#tbCtrls::-webkit-scrollbar{height:5px}
+#tbCtrls>*{flex:0 0 auto}
+#tbCtrls .sp{flex:1 1 auto;min-width:.3rem}
 #tbLabel{font-weight:700;font-variant-numeric:tabular-nums;color:var(--text);white-space:nowrap}
 #tbHint{color:var(--muted);font-size:.68rem}
 #tbStrip{position:relative;height:30px;background:linear-gradient(var(--panel2),var(--panel));border:1px solid var(--border);border-radius:.5rem;cursor:crosshair;overflow:hidden;touch-action:none;user-select:none}
