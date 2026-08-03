@@ -228,6 +228,14 @@ const SECTIONS=[
      {label:"Total",dyn:()=>`(${dtoday.cons()})*${TARIFF}`,unit:"money",dec:2,color:"var(--text)"},
      {label:"☀ Solar saved",dyn:()=>`clamp_min((${dtoday.cons()})-(${dtoday.grid()}),0)*${TARIFF}`,unit:"money",dec:2,color:C.pv},
      {label:"⚡ Grid",dyn:()=>`(${dtoday.grid()})*${TARIFF}`,unit:"money",dec:2,color:C.grid}]},
+   {t:"multi",title:"☀ Solar now",span:3,items:[
+     {label:"Available now",client:"availNow",unit:"W",color:"#3b82f6"},
+     {label:"Spare now",client:"spareNow",unit:"W",color:C.pv},
+     {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"},
+     {label:"Solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
+     {label:"Solar tomorrow",client:"solarTomorrow",unit:"kWh",dec:2,color:"#3b82f6"},
+     {label:"Unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
+     {label:"Prediction error today",client:"errPctToday",unit:"%",dec:0,color:"var(--muted)"}]},
  ]},
  {name:"🔋 Energy", panels:[
    {t:"stat",title:"Generated",dyn:dv.pv,unit:"kWh",dec:2,span:2},
@@ -253,15 +261,11 @@ const SECTIONS=[
  ]},
  {name:"☀️ Solar", panels:[
    {t:"chart",title:"PV voltage / current / power",span:9,series:[{expr:M.pvV,label:"voltage",color:"#3b82f6",unit:"V"},{expr:M.pvA,label:"current",color:"#ef4444",unit:"A"},{expr:M.pvpow,label:"power",color:C.pv,unit:"W",axis:"right"}]},
-   {t:"multi",title:"Headroom",span:3,items:[
-     {label:"Available now",client:"availNow",unit:"W",color:"#3b82f6"},
-     {label:"Spare now",client:"spareNow",unit:"W",color:C.pv},
+   {t:"multi",title:"☀ This period",span:3,items:[
+     {label:"Prediction error",client:"errPctRange",unit:"%",dec:0,color:"var(--muted)"},
      {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
-     {label:"Appx solar today",client:"solarToday",unit:"kWh",dec:2,color:C.pv},
-     {label:"Appx solar tomorrow",client:"solarTomorrow",unit:"kWh",dec:2,color:"#3b82f6"},
-     {label:"Prediction error today",client:"errPctToday",unit:"%",dec:0,color:"var(--muted)"},
-     {label:"Appx unused today",client:"unusedKwh",unit:"kWh",dec:2,color:"var(--muted)"},
-     {label:"Cloud",client:"cloud",unit:"%",dec:0,color:"var(--muted)"}]},
+     {label:"Potential peak",dyn:w=>`max_over_time(weather_pv_potential_w[${w}s])`,unit:"W",color:"#3b82f6"},
+     {label:"Avg irradiance",dyn:w=>`avg_over_time(weather_gti[${w}s])`,unit:"W/m²",dec:0,color:"#f59e0b"}]},
    {t:"sky",title:"Sun path & sky",span:3},
    {t:"chart",pvhead:1,title:"Produced vs predicted (error shaded)",unit:"W",span:9,series:[
      {label:"produced",color:C.pv},{label:"available (predicted)",color:"#3b82f6"},{label:"load",color:C.cons},
@@ -675,6 +679,18 @@ const CLIENT={
       else if((l-v)>thr) ref=Math.min(a,l);   // below forecast AND maxed
       if(ref==null) continue;
       sp+=v; sc+=ref; }
+    return sc>0? 100*(sp-sc)/sc : null; },
+  // same metric but over the chart's SELECTED range (win seconds, ending at evalT); uses the stored weather potential
+  errPctRange: async(win,at)=>{ const to=at||Date.now(), from=to-win*1000, step=Math.max(win>172800?Math.round(win/288):300,60);
+    const [pv,av,ld]=await Promise.all([
+      qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step),
+      qRange(`avg_over_time(weather_pv_potential_w[${Math.max(step,3900)}s])`,from,to,step),
+      qRange(`avg_over_time((inverter_ac_output_active_power)[${step}s])`,from,to,step)]);
+    const avM=new Map(av.map(p=>[p[0],p[1]])), ldM=new Map(ld.map(p=>[p[0],p[1]])); let sp=0,sc=0;
+    for(const [t,v] of pv){ const a=avM.get(t); if(a==null||a<50)continue;
+      const l=ldM.get(t)||0, thr=l<500?250:100; let ref=null;
+      if(v>a) ref=a; else if((l-v)>thr) ref=Math.min(a,l);
+      if(ref==null)continue; sp+=v; sc+=ref; }
     return sc>0? 100*(sp-sc)/sc : null; },
   // wasted = potential − produced, captured = produced/potential. Computed here (two separate
   // single-metric queries, subtracted in JS) because doing it in MetricsQL 422s on label mismatch.
