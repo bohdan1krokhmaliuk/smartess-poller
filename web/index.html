@@ -32,9 +32,10 @@ body.kiosk header{display:none}
 .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px color-mix(in srgb,var(--good) 25%,transparent)}
 .brand .dot.stale{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 25%,transparent)}
 .spacer{flex:1 1 auto}
-.seg{display:inline-flex; background:var(--panel2); border:1px solid var(--border); border-radius:.6rem; overflow:hidden}
-.seg button{appearance:none; border:0; background:transparent; color:var(--muted); padding:.34rem .58rem; font-size:.82rem; cursor:pointer; font-weight:600}
-.seg button.on{background:var(--accent); color:#fff} .seg button:hover:not(.on){color:var(--text)}
+.seg{display:inline-flex; background:var(--panel2); border:1px solid var(--border); border-radius:.7rem; padding:2px; gap:1px}
+.seg button{appearance:none; border:0; background:transparent; color:var(--muted); padding:.3rem .55rem; font-size:.8rem; cursor:pointer; font-weight:600; border-radius:.52rem; transition:background .13s,color .13s; white-space:nowrap}
+.seg button.on{background:var(--accent); color:#fff; box-shadow:0 1px 4px color-mix(in srgb,var(--accent) 42%,transparent)}
+.seg button:hover:not(.on){background:color-mix(in srgb,var(--text) 9%,transparent); color:var(--text)}
 .iconbtn{appearance:none; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--border); background:var(--panel); color:var(--text); min-width:34px;height:32px; padding:0 .5rem; border-radius:.55rem; cursor:pointer; font-size:1rem; line-height:1}
 .iconbtn.on{border-color:var(--accent); color:var(--accent)}
 .rel{position:relative; display:inline-flex}
@@ -81,11 +82,12 @@ main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 #tbCtrls .sp{flex:1 1 auto;min-width:.3rem}
 #tbLabel{font-weight:700;font-variant-numeric:tabular-nums;color:var(--text);white-space:nowrap}
 #tbHint{color:var(--muted);font-size:.68rem}
-#tbStrip{position:relative;height:30px;background:linear-gradient(var(--panel2),var(--panel));border:1px solid var(--border);border-radius:.5rem;cursor:crosshair;overflow:hidden;touch-action:none;user-select:none}
+#tbStrip{position:relative;height:30px;background:linear-gradient(var(--panel2),var(--panel));border:1px solid var(--border);border-radius:.55rem;cursor:crosshair;overflow:hidden;touch-action:none;user-select:none;box-shadow:inset 0 1px 4px rgba(0,0,0,.1)}
 #tbTicks{position:absolute;inset:0;pointer-events:none}
-#tbTicks span{position:absolute;top:0;bottom:0;border-left:1px solid var(--grid)}
+#tbTicks .maj{position:absolute;top:0;bottom:0;border-left:1px solid var(--grid)}
+#tbTicks .min{position:absolute;bottom:0;height:7px;border-left:1px solid var(--border);opacity:.5}
 #tbNow{position:absolute;top:0;bottom:0;border-left:1.5px dashed var(--accent);opacity:.8;pointer-events:none;display:none}
-#tbWin{position:absolute;top:0;bottom:0;min-width:10px;box-sizing:border-box;background:color-mix(in srgb,var(--accent) 22%,transparent);border-left:2px solid var(--accent);border-right:2px solid var(--accent);cursor:grab;border-radius:2px}
+#tbWin{position:absolute;top:0;bottom:0;min-width:10px;box-sizing:border-box;background:linear-gradient(color-mix(in srgb,var(--accent) 30%,transparent),color-mix(in srgb,var(--accent) 15%,transparent));border-left:2px solid var(--accent);border-right:2px solid var(--accent);cursor:grab;border-radius:3px;box-shadow:0 2px 10px color-mix(in srgb,var(--accent) 30%,transparent)}
 #tbWin::before,#tbWin::after{content:"";position:absolute;top:50%;height:12px;width:2px;border-radius:1px;background:var(--accent);transform:translateY(-50%)}
 #tbWin::before{left:3px}#tbWin::after{right:3px}
 #tbWin:active{cursor:grabbing}
@@ -135,7 +137,6 @@ body{padding-bottom:96px}
       <button data-snap="day">Day</button><button data-snap="week">Week</button><button data-snap="month">Month</button><button data-snap="year">Year</button>
     </div>
     <button class="iconbtn" id="tbOut" title="Zoom out (2×)">🔍−</button><button class="iconbtn" id="tbIn" title="Zoom in (½×)">🔍+</button>
-    <button class="iconbtn" id="tbLive" title="Back to live (6h)">⏵ Live</button>
     <span class="sp"></span>
     <span id="tbLabel"></span>
     <div class="seg" id="refreshSel"><button data-ms="0">⏸</button><button data-ms="10000">10s</button><button data-ms="30000" class="on">30s</button><button data-ms="60000">1m</button></div>
@@ -869,21 +870,27 @@ function tlBox(from,to,c){ const win=document.getElementById("tbWin"); if(!win)r
   const L=Math.max(0,(from-c.start)/c.span), R=Math.min(1,(to-c.start)/c.span);
   win.style.left=(L*100)+"%"; win.style.width=(Math.max(0,R-L)*100)+"%";
   const lb=document.getElementById("tbLabel"); if(lb)lb.textContent=fmtDT(from)+" – "+fmtDT(to); }
-function tlTicks(from,to){ const span=to-from, out=[], p=n=>String(n).padStart(2,"0"), off=new Date().getTimezoneOffset()*60000,
-    mo=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], push=(v,l)=>{ if(v>=from&&v<=to)out.push({t:v,l}); };
-  if(span<=2*864e5){ const s=span<=6*3600e3?3600e3:(span<=864e5?3*3600e3:6*3600e3);   // hours
-    for(let v=Math.ceil((from-off)/s)*s+off;v<=to;v+=s){const d=new Date(v); push(v,p(d.getHours())+":"+p(d.getMinutes()));} }
-  else if(span<=70*864e5){ const days=span<=14*864e5?1:span<=35*864e5?3:7;   // days
-    for(let v=Math.ceil((from-off)/864e5)*864e5+off;v<=to;v+=864e5){ if(Math.round((v-off)/864e5)%days===0){const d=new Date(v); push(v,p(d.getDate())+"."+p(d.getMonth()+1));} } }
-  else if(span<=800*864e5){ const d=new Date(from); d.setDate(1); d.setHours(0,0,0,0); const stepM=span<=200*864e5?1:span<=400*864e5?2:3;   // months
-    while(d.getTime()<=to){ push(d.getTime(), mo[d.getMonth()]+" "+String(d.getFullYear()).slice(2)); d.setMonth(d.getMonth()+stepM); } }
-  else { const d=new Date(from); d.setMonth(0,1); d.setHours(0,0,0,0); const stepY=span<=4*365*864e5?1:2;   // years
-    while(d.getTime()<=to){ push(d.getTime(), String(d.getFullYear())); d.setFullYear(d.getFullYear()+stepY); } }
-  return out; }
+function tlTicks(from,to){ const span=to-from, off=new Date().getTimezoneOffset()*60000, p=n=>String(n).padStart(2,"0"),
+    mo=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], maj=[], min=[],
+    aM=(v,l)=>{ if(v>=from&&v<=to)maj.push({t:v,l}); }, am=v=>{ if(v>=from&&v<=to)min.push(v); },
+    fixed=(s,f)=>{ for(let v=Math.ceil((from-off)/s)*s+off;v<=to;v+=s) f(v); };
+  if(span<=2*864e5){ const mS=span<=6*3600e3?3600e3:(span<=864e5?3*3600e3:6*3600e3), nS=span<=6*3600e3?900e3:3600e3;   // hours; minor 15min/1h
+    fixed(mS,v=>{const d=new Date(v); aM(v,p(d.getHours())+":"+p(d.getMinutes()));}); fixed(nS,am); }
+  else if(span<=70*864e5){ const days=span<=14*864e5?1:span<=35*864e5?3:7, nS=days===1?6*3600e3:864e5;   // days; minor 6h/1d
+    for(let v=Math.ceil((from-off)/864e5)*864e5+off;v<=to;v+=864e5){ if(Math.round((v-off)/864e5)%days===0){const d=new Date(v); aM(v,p(d.getDate())+"."+p(d.getMonth()+1));} } fixed(nS,am); }
+  else if(span<=800*864e5){ const stepM=span<=200*864e5?1:span<=400*864e5?2:3;   // months; minor month/week
+    const d=new Date(from); d.setDate(1); d.setHours(0,0,0,0); while(d.getTime()<=to){ aM(d.getTime(), mo[d.getMonth()]+" "+String(d.getFullYear()).slice(2)); d.setMonth(d.getMonth()+stepM); }
+    if(stepM>1){ const m=new Date(from); m.setDate(1); m.setHours(0,0,0,0); while(m.getTime()<=to){ am(m.getTime()); m.setMonth(m.getMonth()+1); } } else fixed(7*864e5,am); }
+  else { const stepY=span<=4*365*864e5?1:2;   // years; minor months
+    const d=new Date(from); d.setMonth(0,1); d.setHours(0,0,0,0); while(d.getTime()<=to){ aM(d.getTime(), String(d.getFullYear())); d.setFullYear(d.getFullYear()+stepY); }
+    const m=new Date(from); m.setDate(1); m.setHours(0,0,0,0); const sm=stepY===1?1:3; while(m.getTime()<=to){ am(m.getTime()); m.setMonth(m.getMonth()+sm); } }
+  return {maj,min}; }
 function drawTimeline(){ if(tlDrag)return; const strip=document.getElementById("tbStrip"); if(!strip)return;
-  TLCTX=tlContext(); const c=TLCTX, {from,to}=range(), ticks=tlTicks(c.start,c.start+c.span), pc=t=>((t-c.start)/c.span*100).toFixed(2);
-  document.getElementById("tbTicks").innerHTML=ticks.map(t=>`<span style="left:${pc(t.t)}%"></span>`).join("");
-  document.getElementById("tbAxis").innerHTML=ticks.map(t=>`<span style="left:${pc(t.t)}%">${t.l}</span>`).join("");
+  TLCTX=tlContext(); const c=TLCTX, {from,to}=range(), tk=tlTicks(c.start,c.start+c.span), pc=t=>((t-c.start)/c.span*100).toFixed(2);
+  document.getElementById("tbTicks").innerHTML =
+    tk.min.map(t=>`<span class="min" style="left:${pc(t)}%"></span>`).join("") +
+    tk.maj.map(t=>`<span class="maj" style="left:${pc(t.t)}%"></span>`).join("");
+  document.getElementById("tbAxis").innerHTML=tk.maj.map(t=>`<span style="left:${pc(t.t)}%">${t.l}</span>`).join("");
   const now=Date.now(), nx=(now-c.start)/c.span, nm=document.getElementById("tbNow");
   if(nx>=0&&nx<=1){ nm.style.display="block"; nm.style.left=(nx*100)+"%"; } else nm.style.display="none";
   tlBox(from,to,c); }
@@ -907,7 +914,6 @@ document.querySelectorAll(".tbH").forEach(h=>h.addEventListener("pointerdown",e=
 document.getElementById("tbStrip").addEventListener("click",tlClick);
 document.getElementById("tbOut").addEventListener("click",()=>tlZoom(2));
 document.getElementById("tbIn").addEventListener("click",()=>tlZoom(0.5));
-document.getElementById("tbLive").addEventListener("click",()=>setPreset(21600*1000));
 document.addEventListener("keydown",e=>{ if(!(e.metaKey||e.ctrlKey))return; if(/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName||"")))return; const k=e.key.toLowerCase(); if(k==="z"){ e.preventDefault(); e.shiftKey?redoRange():undoRange(); } else if(k==="y"){ e.preventDefault(); redoRange(); } });
 document.getElementById("refreshNow").addEventListener("click",refresh);
 document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
