@@ -77,8 +77,9 @@ td.code{font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap}
     <b class="lev"><span class="dot2" style="background:var(--warn)"></span>Попередження</b> — дорадчо/дерейтинг, працює далі.
     <b class="lev"><span class="dot2" style="background:var(--good)"></span>Чисто</b> — активних немає.<br>
     <b>Історія</b> ведеться поллером від моменту запуску (кожна <b>зміна</b> набору активних). Старіші події
-    (до появи поллера) можна довантажити з хмари DessMonitor — там у телеметрії є код аварії на кожен запис.
-    Сам інвертор історію <b>не зберігає</b>: QPIWS повертає лише поточний стан.
+    (до появи поллера) можна довантажити з хмари DessMonitor — там у журналі є кілька останніх подій.
+    Інвертор пише коди аварій у <b>власну пам'ять</b> (прапорець «Fault record» увімк.) — їх видно на
+    екрані приладу, але по кабелю (PI30) цей журнал <b>не читається</b>: QPIWS віддає лише поточний стан.
   </div>
 
   <div class="section">🕘 Історія змін</div>
@@ -87,7 +88,13 @@ td.code{font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap}
     <tbody id="histbody"><tr><td class="empty" colspan="3">завантаження…</td></tr></tbody>
   </table></div></div>
 
-  <div class="section">📖 Довідник кодів аварій (Axpert/VMIII)</div>
+  <div class="section">📖 Довідник попереджень (QPIWS) — усі можливі</div>
+  <div class="card"><div class="tblwrap"><table>
+    <thead><tr><th>Попередження</th><th>Рівень</th><th>Що означає</th></tr></thead>
+    <tbody id="wrefbody"></tbody>
+  </table></div></div>
+
+  <div class="section">📖 Числові коди аварій із хмари/експорту (Axpert)</div>
   <div class="card"><div class="tblwrap"><table>
     <thead><tr><th>Код</th><th>Значення</th><th>Рівень</th></tr></thead>
     <tbody id="refbody"></tbody>
@@ -134,6 +141,29 @@ function renderRef(){
     `<tr><td class="code">${code}</td><td>${txt}</td><td><span class="lev"><span class="dot2" style="background:var(--bad)"></span>аварія</span></td></tr>`).join("");
 }
 
+// all QPIWS warning bits the poller can report, with severity + a one-line meaning
+const QPIWS_FAULT=new Set(["inverter_fault","bus_over","bus_under","bus_soft_fail","opv_short","inverter_voltage_low","inverter_voltage_high","inverter_over_current","inverter_soft_fail","self_test_fail","op_dc_over_voltage","battery_open","current_sensor_fail","battery_short","mppt_overload_fault","battery_under_shutdown","over_temperature"]);
+const WREF=[
+ ["inverter_fault","Загальна аварія — інвертор зупинив вихід"],["bus_over","Напруга DC-шини перевищила ліміт"],
+ ["bus_under","Напруга DC-шини нижча за ліміт"],["bus_soft_fail","Не вдався плавний старт DC-шини"],
+ ["line_fail","Мережа зникла/поза межами — перехід на батарею"],["opv_short","Коротке замикання на виході"],
+ ["inverter_voltage_low","Напруга інвертора занизька"],["inverter_voltage_high","Напруга інвертора зависока"],
+ ["over_temperature","Перегрів радіатора/силової частини"],["fan_locked","Заклинив вентилятор охолодження"],
+ ["battery_voltage_high","Напруга АКБ вища за безпечну"],["battery_low_alarm","Низький заряд АКБ (попередження)"],
+ ["battery_under_shutdown","Вимкнення через глибокий розряд АКБ"],["over_load","Навантаження перевищило номінал"],
+ ["eeprom_fault","Помилка внутрішньої пам'яті налаштувань"],["inverter_over_current","Надструм силового каскаду"],
+ ["inverter_soft_fail","Не вдався плавний старт інвертора"],["self_test_fail","Не пройшов самотест при старті"],
+ ["op_dc_over_voltage","Завелика постійна складова на AC-виході"],["battery_open","Втрачено з'єднання з АКБ (обрив)"],
+ ["current_sensor_fail","Несправність датчика струму"],["battery_short","Коротке замикання АКБ"],
+ ["power_limit","Робота з обмеженням потужності"],["pv_voltage_high","Напруга сонячних панелей завелика"],
+ ["mppt_overload_fault","Перевантаження MPPT (аварія)"],["mppt_overload_warning","Перевантаження MPPT (попередження)"],
+ ["battery_too_low_to_charge","АКБ надто розряджена, щоб почати заряд"],
+];
+function renderWref(){
+  document.getElementById("wrefbody").innerHTML=WREF.map(([n,m])=>{ const s=QPIWS_FAULT.has(n)?"fault":"warning",c=sevColor(s);
+    return `<tr><td>${wlabel(n)}</td><td><span class="lev"><span class="dot2" style="background:${c}"></span>${s==="fault"?"аварія":"попередження"}</span></td><td style="color:var(--muted)">${m}</td></tr>`; }).join("");
+}
+
 async function load(){
   try{
     const [w,hist]=await Promise.all([
@@ -144,7 +174,7 @@ async function load(){
     document.getElementById("fresh").className="dot"+(w&&w.raw?"":" stale");
   }catch(e){}
 }
-renderRef();
+renderRef(); renderWref();
 document.getElementById("reload").addEventListener("click",load);
 document.getElementById("theme").addEventListener("click",()=>{
   const cur=document.documentElement.getAttribute("data-theme");
