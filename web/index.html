@@ -235,8 +235,9 @@ const M={
   pf:"inverter_ac_output_active_power / inverter_ac_output_apparent_power", mode:"mode_value", fault:"fault_value", pvtot:"energy_value",
   avg1h:"avg_over_time(inverter_ac_output_active_power[1h])", avg24h:"avg_over_time(inverter_ac_output_active_power[24h])",
 };
-// energy over a window: lifetime-counter delta (live) OR integral of power (historical backfill, where the counters don't exist). kWh either way.
-const eFromP=(c,p,w)=>`(max_over_time(${c}[${w}s]) - min_over_time(${c}[${w}s])) or (avg_over_time((${p})[${w}s]) * ${w}/3600000)`;
+// energy over a window: lifetime-counter delta (live) OR time-weighted integral of power (historical backfill, where the counters don't exist). kWh either way.
+// integrate() is used rather than avg_over_time()*hours because the backfill sampling is uneven/daytime-clustered — a plain average ×24h wildly overcounts (e.g. 14 kWh on a day whose morning data is missing).
+const eFromP=(c,p,w)=>`(max_over_time(${c}[${w}s]) - min_over_time(${c}[${w}s])) or (integrate((${p})[${w}s]) / 3.6e6)`;
 const dv={
   cons:w=>eFromP("energymeter_consumed_total","inverter_ac_output_active_power",w),
   pv:w=>eFromP("energymeter_pv_total","inverter_pv_input_voltage*inverter_pv_input_current",w),
