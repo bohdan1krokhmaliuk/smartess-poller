@@ -125,9 +125,8 @@ body{padding-bottom:96px}
 <div id="timebar">
   <div id="tbCtrls">
     <div class="seg" id="presets">
-      <button data-dur="900">15m</button><button data-dur="3600">1h</button><button data-dur="21600" class="on">6h</button><button data-dur="86400">24h</button><button data-dur="604800">7d</button><button data-dur="2592000">30d</button><button data-dur="31536000">1y</button><button data-today="1">Today</button>
+      <button data-dur="900">15m</button><button data-dur="3600">1h</button><button data-dur="21600" class="on">6h</button><button data-dur="86400">24h</button><button data-dur="604800">7d</button><button data-dur="2592000">30d</button><button data-dur="31536000">1y</button><button data-today="1">Today</button><button id="customBtn" title="Custom period — pick dates">Custom</button>
     </div>
-    <button class="iconbtn" id="customBtn" title="Custom period — pick dates">Custom</button>
     <div class="seg" id="shiftSel" title="Shift the visible window (keeps the same zoom)">
       <button data-shift="y" data-n="-1" title="−1 year">«Y</button><button data-shift="M" data-n="-1" title="−1 month">«M</button><button data-shift="d" data-n="-1" title="−1 day">«D</button><button data-shift="d" data-n="1" title="+1 day">D»</button><button data-shift="M" data-n="1" title="+1 month">M»</button><button data-shift="y" data-n="1" title="+1 year">Y»</button>
     </div>
@@ -838,7 +837,7 @@ function isLive(){ return state.kind==="preset" || state.kind==="today" || (stat
 function tick(){ if(isLive()) refresh(); }   // auto-refresh skips static (past) custom ranges
 function fmtDT(t){ const d=new Date(t),p=n=>String(n).padStart(2,"0"); return p(d.getDate())+"."+p(d.getMonth()+1)+"."+d.getFullYear()+" "+p(d.getHours())+":"+p(d.getMinutes()); }
 // live (preset/today) -> calendar icon; a fixed picked period -> show the range text
-function updateCustomBtn(){ const b=document.getElementById("customBtn"); if(state.custom){ const r=range(); b.textContent=fmtDT(r.from)+" – "+fmtDT(r.to); b.style.fontSize=".72rem"; b.title="Custom period — click to change"; } else { b.textContent="Custom"; b.style.fontSize=""; b.title="Custom period — pick dates"; } }
+function updateCustomBtn(){ const b=document.getElementById("customBtn"); b.classList.toggle("on",state.custom); if(state.custom){ const r=range(); b.textContent=fmtDT(r.from)+" – "+fmtDT(r.to); b.style.fontSize=".72rem"; b.title="Custom period — click to change"; } else { b.textContent="Custom"; b.style.fontSize=""; b.title="Custom period — pick dates"; } }
 // undo/redo of the visible period (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z) — covers presets, calendar and chart drag-zoom
 let rangeHist=[], rangeIdx=-1;
 function snapState(){ return {kind:state.kind, dur:state.dur, abs:state.abs?{from:state.abs.from,to:state.abs.to}:null, custom:state.custom}; }
@@ -849,7 +848,7 @@ function applyHist(s){ state.kind=s.kind; state.dur=s.dur; state.abs=s.abs?{from
   updateCustomBtn(); refresh(); }
 function undoRange(){ if(rangeIdx>0){ rangeIdx--; applyHist(rangeHist[rangeIdx]); } }
 function redoRange(){ if(rangeIdx<rangeHist.length-1){ rangeIdx++; applyHist(rangeHist[rangeIdx]); } }
-document.querySelectorAll("#presets button").forEach(b=>b.addEventListener("click",()=>{ b.dataset.today?setToday():setPreset(+b.dataset.dur*1000); }));
+document.querySelectorAll("#presets button[data-dur],#presets button[data-today]").forEach(b=>b.addEventListener("click",()=>{ b.dataset.today?setToday():setPreset(+b.dataset.dur*1000); }));
 document.querySelectorAll("#shiftSel button[data-shift]").forEach(b=>b.addEventListener("click",()=>shiftRange(b.dataset.shift, +b.dataset.n)));
 function setThisPeriod(unit){ const d=new Date((range().from+range().to)/2); d.setHours(0,0,0,0);   // snap to the whole current day/week/month/year around the period you're viewing
   if(unit==="week") d.setDate(d.getDate()-((d.getDay()+6)%7));   // back to Monday
@@ -915,8 +914,8 @@ document.addEventListener("keydown",e=>{ if(!(e.metaKey||e.ctrlKey))return; if(/
 document.getElementById("refreshNow").addEventListener("click",refresh);
 document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
 const pop=document.getElementById("popover"),cbtn=document.getElementById("customBtn"); const toInput=ms=>new Date(ms-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
-cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); const r=cbtn.getBoundingClientRect(); pop.style.left=Math.max(6,Math.min(r.left,innerWidth-240))+"px"; pop.style.bottom=(innerHeight-r.top+6)+"px"; } pop.classList.toggle("open",open); cbtn.classList.toggle("on",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
-document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); cbtn.classList.remove("on"); setAbs(f,t); } });
+cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); const r=cbtn.getBoundingClientRect(); pop.style.left=Math.max(6,Math.min(r.left,innerWidth-240))+"px"; pop.style.bottom=(innerHeight-r.top+6)+"px"; } pop.classList.toggle("open",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
+document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); setAbs(f,t); } });
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
 cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ const S=(id,v)=>document.getElementById(id).value=(v==null?"":v); S("tariff",TARIFF||""); document.getElementById("currency").value=CUR; S("pvmax",PVMAX||""); S("pvlat",PVLAT); S("pvlon",PVLON); S("pvkwp",PVKWP||""); S("pvtilt",PVTILT); S("pvaz",PVAZ); document.getElementById("agg").value=AGG; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
@@ -925,7 +924,7 @@ document.getElementById("cfgApply").addEventListener("click",()=>{ const V=id=>d
   PVLAT=setNum("pvlat","pvlat"); PVLON=setNum("pvlon","pvlon"); PVKWP=setNum("pvkwp","pvkwp")||0; PVTILT=setNum("pvtilt","pvtilt"); PVAZ=setNum("pvaz","pvaz");
   AGG=V("agg")||"avg"; localStorage.setItem("agg",AGG);
   cfgPop.classList.remove("open"); cfgBtn.classList.remove("on"); saveServerSettings(); fetchWeather(); refresh(); });
-document.addEventListener("click",e=>{ if(!e.target.closest(".rel")){ pop.classList.remove("open");cbtn.classList.remove("on"); cfgPop.classList.remove("open");cfgBtn.classList.remove("on"); } });
+document.addEventListener("click",e=>{ if(e.target.closest(".rel")||e.target.closest("#popover")||e.target.closest("#customBtn"))return; pop.classList.remove("open"); cfgPop.classList.remove("open");cfgBtn.classList.remove("on"); });
 
 function curTheme(){ const a=document.documentElement.getAttribute("data-theme"); return a||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"); }
 function applyTheme(t){ if(t)document.documentElement.setAttribute("data-theme",t); else document.documentElement.removeAttribute("data-theme"); document.getElementById("themeBtn").textContent=curTheme()==="dark"?"☀️":"🌙";
