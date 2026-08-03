@@ -959,7 +959,7 @@ cfrom.addEventListener("input",popValidate); cto.addEventListener("input",popVal
 document.getElementById("cnow").addEventListener("click",()=>{ cto.value=toInput(Date.now()); popValidate(); });
 capply.addEventListener("click",()=>{ const f=new Date(cfrom.value).getTime(),t=new Date(cto.value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); setAbs(f,t); } });
 // ---- range calendar (two-click: click start day, click end day; hover previews; future days disabled) ----
-var calView=null, calAnchor=null, calSel=null, calHover=null, calData=new Map(), calPresence=new Set(), calSeq=0, calCache=new Map();
+var calView=null, calAnchor=null, calSel=null, calHover=null, calData=new Map(), calApprox=new Set(), calPresence=new Set(), calSeq=0, calCache=new Map();
 const dayStart=ms=>{ const d=new Date(ms); d.setHours(0,0,0,0); return d.getTime(); };
 function renderCal(){ const grid=document.getElementById("calGrid"); if(!grid||!calView)return;
   document.getElementById("calM").textContent=calView.toLocaleString([], {month:"long", year:"numeric"});
@@ -970,26 +970,28 @@ function renderCal(){ const grid=document.getElementById("calGrid"); if(!grid||!
     if(d.getMonth()!==mo)cls.push("oth"); if(ds===today)cls.push("today"); if(ds>today)cls.push("fut");
     if(a!=null){ if(ds===a||ds===b)cls.push("edge"); else if(ds>a&&ds<b)cls.push("inrange"); }
     const g=calData.get(ds); let dot="", tip="";
-    if(g!=null&&g>0.05){ dot=`<i class="dd" style="opacity:${(0.35+Math.min(1,g/10)*0.65).toFixed(2)}"></i>`; tip=` title="${g.toFixed(1)} kWh solar"`; }   // green = energy recorded, intensity ~ kWh
+    if(g!=null&&g>0.05){ dot=`<i class="dd" style="opacity:${(0.35+Math.min(1,g/10)*0.65).toFixed(2)}"></i>`; tip=` title="${calApprox.has(ds)?'~'+g.toFixed(1)+' kWh (backfill, to battery)':g.toFixed(1)+' kWh solar'}"`; }   // green = energy recorded, intensity ~ kWh
     else if(calPresence.has(ds)){ dot=`<i class="dd gray"></i>`; tip=` title="data — no energy recorded"`; }                                        // gray = inverter data exists but no energy
     html+=`<span class="${cls.join(" ")}" data-d="${ds}"${tip}>${d.getDate()}${dot}</span>`; }
   grid.innerHTML=html; }
 function calOpen(){ const {from,to}=range(); calSel={start:dayStart(from), end:dayStart(to)}; calAnchor=null; calHover=null; calView=new Date(from); calView.setDate(1); calView.setHours(0,0,0,0); renderCal(); calLoadData(); }
 async function calLoadData(){ if(!calView)return; const gs=new Date(calView); gs.setDate(1-((gs.getDay()+6)%7)); const from=dayStart(gs.getTime());
-  const apply=o=>{ calData=o.green; calPresence=o.has; renderCal(); };
+  const apply=o=>{ calData=o.green; calApprox=o.approx; calPresence=o.has; renderCal(); };
   if(calCache.has(from)){ apply(calCache.get(from)); return; }   // past months are immutable → reuse
-  const seq=++calSeq, now=Date.now(), to=Math.min(from+43*864e5, now); if(to<=from){ calData=new Map(); calPresence=new Set(); renderCal(); return; }
+  const seq=++calSeq, now=Date.now(), to=Math.min(from+43*864e5, now); if(to<=from){ calData=new Map(); calApprox=new Set(); calPresence=new Set(); renderCal(); return; }
   try{
-    const [mids,pres,cur]=await Promise.all([
-      qRange(`last_over_time(energymeter_pv_total[1800s])`, from, to, 86400),        // lifetime PV-kWh counter sampled at each local midnight
-      qRange(`count_over_time(inverter_battery_voltage[86400s])`, from, to, 86400),  // any inverter data that day? (battery V is always present when up)
-      qInstant(`energymeter_pv_total`, now)]);                                       // current counter → today's partial
+    const [mids,chg,pres,cur]=await Promise.all([
+      qRange(`last_over_time(energymeter_pv_total[1800s])`, from, to, 86400),          // lifetime PV-kWh counter at each local midnight (accurate, live era)
+      qRange(`integrate(inverter_pv_charging_power[86400s])/3.6e6`, from, to, 86400),   // backfill fallback: time-weighted charging energy (kWh), robust to sample density; pre-counter days stored pv current=0 so pvpow is useless there
+      qRange(`count_over_time(inverter_battery_voltage[86400s])`, from, to, 86400),     // any inverter data that day? (battery V is always present when up)
+      qInstant(`energymeter_pv_total`, now)]);                                          // current counter → today's partial
     if(seq!==calSeq)return;
-    const green=new Map();
-    for(let i=0;i+1<mids.length;i++){ if(mids[i+1][0]-mids[i][0]>1.5*864e5)continue; const k=mids[i+1][1]-mids[i][1]; if(k>=0) green.set(dayStart(mids[i][0]), k); }   // day = between two midnights
+    const green=new Map(), approx=new Set();
+    for(let i=0;i+1<mids.length;i++){ if(mids[i+1][0]-mids[i][0]>1.5*864e5)continue; const k=mids[i+1][1]-mids[i][1]; if(k>=0) green.set(dayStart(mids[i][0]), k); }   // day = counter delta between midnights
     if(mids.length){ const L=mids[mids.length-1], t=dayStart(L[0]); if(t===dayStart(now)&&cur!=null&&cur-L[1]>=0) green.set(t, cur-L[1]); }   // today so far
+    for(const [T,v] of chg){ const d=dayStart(T-12*3600e3); if(!green.has(d)&&v>0.1){ green.set(d, v); approx.add(d); } }   // fill counter-less (backfill) days
     const has=new Set(); for(const [T,c] of pres){ if(c>0) has.add(dayStart(T-12*3600e3)); } has.add(dayStart(now));
-    const o={green,has}; if(from+43*864e5<=now) calCache.set(from,o);   // cache only fully-past grids; the current month keeps updating
+    const o={green,approx,has}; if(from+43*864e5<=now) calCache.set(from,o);   // cache only fully-past grids; the current month keeps updating
     apply(o); }catch(e){} }
 function calSyncInputs(){ if(!calSel)return; cfrom.value=toInput(calSel.start); cto.value=toInput(calSel.end+86400000-1); popValidate(); }
 function calFromInputs(){ const f=new Date(cfrom.value).getTime(), t=new Date(cto.value).getTime(); if(isFinite(f)&&isFinite(t)){ calSel={start:dayStart(f),end:dayStart(t)}; calAnchor=null; renderCal(); } }
