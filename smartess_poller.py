@@ -1157,7 +1157,7 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
             if path == "/warnings/history":            # warning/fault change-log (JSONL -> array)
                 try:
                     with open(WARN_HISTORY_FILE) as f:
-                        events = [json.loads(ln) for ln in f if ln.strip()][-200:]
+                        events = [json.loads(ln) for ln in f if ln.strip()][-5000:]
                 except Exception:
                     events = []
                 self._reply(200, "application/json", json.dumps(events))
@@ -1169,6 +1169,14 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                         self._reply(200, "text/html; charset=utf-8", f.read())
                 except Exception:
                     self._reply(404, "text/plain", "inverter page not found")
+                return
+
+            if path in ("/warnings.html", "/faults"):
+                try:
+                    with open(os.path.join(web_dir, "warnings.html"), "rb") as f:
+                        self._reply(200, "text/html; charset=utf-8", f.read())
+                except Exception:
+                    self._reply(404, "text/plain", "warnings page not found")
                 return
 
             if path == "/settings":

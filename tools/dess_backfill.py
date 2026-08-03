@@ -63,6 +63,16 @@ RATED_ENUM = {                  # col index -> (rated_<field>, {text: code})
                                      "Solar + Utility": 2, "Only Solar": 3, "Solar And Utility": 2}),
     31: ("battery_type", {"AGM": 0, "Flooded": 1, "User": 2, "Pylontech": 3, "Pyl": 3}),
 }
+FAULT_COL = 48                  # "Inverter Fault" — numeric Axpert fault code (0 = OK)
+FAULT_CODE_NAME = {             # code -> canonical name (reuses the poller's QPIWS names where they align)
+    "01": "fan_locked", "02": "over_temperature", "03": "battery_voltage_high",
+    "04": "battery_low_alarm", "05": "opv_short", "06": "inverter_voltage_high",
+    "07": "over_load", "08": "bus_over", "09": "bus_soft_fail", "10": "pv_voltage_high",
+    "11": "main_relay_fault", "51": "inverter_over_current", "52": "bus_under",
+    "53": "inverter_soft_fail", "55": "op_dc_over_voltage", "57": "current_sensor_fail",
+    "58": "inverter_voltage_low", "60": "power_feedback_fault", "71": "firmware_mismatch",
+    "72": "current_share_fault", "80": "can_fault", "81": "host_loss", "82": "sync_loss",
+}
 
 
 def num(x):
@@ -140,15 +150,18 @@ def main():
     ap.add_argument("--tilt", type=float, default=11.0)
     ap.add_argument("--az", type=float, default=235.0)
     ap.add_argument("--no-weather", action="store_true")
+    ap.add_argument("--warn-out", default="warnings_backfill.jsonl",
+                    help="fault change-log to merge into the Pi's .warnings_history.jsonl")
     args = ap.parse_args()
 
     files = sorted(glob.glob(os.path.join(args.xlsx_dir, "*.xlsx")))
     if not files:
         raise SystemExit("no XLSX in " + args.xlsx_dir)
 
-    n_inv = n_rated = n_wx = 0
+    n_inv = n_rated = n_wx = n_warn = 0
     days = set()
     rated_obs = []
+    fault_obs = []
     gz = gzip.open(args.out, "wt")
 
     for f in files:
@@ -182,6 +195,10 @@ def main():
                     rated[key] = m[r[col]]
             if rated:
                 rated_obs.append((ts, tuple(sorted(rated.items()))))
+            # fault code for this row (0 = OK); collected here, emitted on-change below
+            if FAULT_COL < len(r) and r[FAULT_COL] is not None:
+                base = str(r[FAULT_COL]).split(".")[0].strip()
+                fault_obs.append((ts, "0" if base in ("", "0", "None") else base.zfill(2)))
 
     # rated: emit only real changes, in chronological order (rows arrive newest-first)
     rated_obs.sort(key=lambda x: x[0])
@@ -191,6 +208,27 @@ def main():
             gz.write("rated " + ",".join("%s=%s" % (k, fnum(v)) for k, v in items) + " %d\n" % ts)
             prev = items
             n_rated += 1
+
+    # faults: emit onset/clear events as a change-log in the poller's warnings-history JSONL shape
+    # (append to .warnings_history.jsonl on the Pi so history merges with the live log)
+    fault_obs.sort(key=lambda x: x[0])
+    prev = None
+    with open(args.warn_out, "w") as wf:
+        for ts, code in fault_obs:
+            if code == prev:
+                continue
+            if prev is None and code == "0":     # skip the initial all-clear baseline
+                prev = code
+                continue
+            prev = code
+            active = [] if code == "0" else [
+                {"name": FAULT_CODE_NAME.get(code, "fault_code_%s" % code), "severity": "fault"}]
+            secs = ts // 1_000_000_000
+            wf.write(json.dumps({"ts": secs,
+                                 "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(secs)),
+                                 "active": active, "level": "fault" if active else "ok",
+                                 "raw": code}) + "\n")
+            n_warn += 1
 
     # weather from the archive
     if not args.no_weather and days:
@@ -212,6 +250,9 @@ def main():
     print("  inverter points: %d" % n_inv)
     print("  rated points   : %d (on change)" % n_rated)
     print("  weather points : %d" % n_wx)
+    print("  fault events   : %d (on change) -> %s" % (n_warn, args.warn_out))
+    print("\nMerge fault history on the Pi (then it shows on /warnings.html):")
+    print("  cat %s >> ~/smartess-poller/.warnings_history.jsonl" % os.path.basename(args.warn_out))
     print("  day span       : %s .. %s (%d days)" % (min(days), max(days), len(days)))
     print("\nIngest on the Pi (where VM is 127.0.0.1:8428):")
     print("  curl --data-binary @%s -H 'Content-Encoding: gzip' 'http://127.0.0.1:8428/write'"

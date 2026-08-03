@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Аварії та попередження</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E⚠️%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#f4f6fb; --panel:#ffffff; --panel2:#eef1f7; --text:#0f172a; --muted:#64748b;
+  --border:#e2e8f0; --grid:#e7ebf3; --accent:#2563eb; --good:#16a34a; --warn:#f59e0b; --bad:#dc2626;
+  --shadow:0 1px 3px rgba(15,23,42,.08),0 1px 2px rgba(15,23,42,.04);
+}
+:root[data-theme=dark]{
+  --bg:#0b1020; --panel:#111829; --panel2:#0e1524; --text:#e6ebf5; --muted:#8896ad;
+  --border:#1e293b; --grid:#1b2437; --accent:#3b82f6; --good:#22c55e; --warn:#eab308; --bad:#ef4444;
+  --shadow:0 1px 3px rgba(0,0,0,.4); color-scheme:dark;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme=light]){ color-scheme:dark;
+  --bg:#0b1020; --panel:#111829; --panel2:#0e1524; --text:#e6ebf5; --muted:#8896ad;
+  --border:#1e293b; --grid:#1b2437; --accent:#3b82f6; --good:#22c55e; --warn:#eab308; --bad:#ef4444;
+  --shadow:0 1px 3px rgba(0,0,0,.4);
+}}
+*{box-sizing:border-box} html,body{margin:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,system-ui,sans-serif;
+  background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; padding-bottom:2rem}
+header{position:sticky; top:0; z-index:20; background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:saturate(150%) blur(8px); border-bottom:1px solid var(--border);
+  padding:.55rem clamp(.6rem,2vw,1.2rem); display:flex; flex-wrap:wrap; gap:.5rem .7rem; align-items:center}
+.brand{font-weight:700; font-size:1.05rem; display:flex; align-items:center; gap:.4rem}
+.spacer{flex:1 1 auto}
+a.back,.iconbtn{appearance:none; border:1px solid var(--border); background:var(--panel); color:var(--text);
+  height:32px; padding:0 .6rem; border-radius:.55rem; cursor:pointer; font-size:.85rem; line-height:32px;
+  text-decoration:none; display:inline-flex; align-items:center; gap:.35rem}
+a.back:hover,.iconbtn:hover{border-color:var(--accent)}
+main{padding:clamp(.6rem,2vw,1.1rem); max-width:1100px; margin:0 auto}
+.note{background:var(--panel2); border:1px solid var(--border); border-radius:.7rem; padding:.7rem .85rem;
+  font-size:.82rem; color:var(--muted); line-height:1.6; margin-bottom:1rem}
+.note b{color:var(--text)}
+.section{margin:1.3rem 0 .5rem; font-size:.9rem; font-weight:700; color:var(--text); letter-spacing:.01em}
+.card{background:var(--panel); border:1px solid var(--border); border-radius:.8rem; box-shadow:var(--shadow);
+  overflow:hidden}
+.status{padding:.9rem 1rem; border-radius:.8rem; border:1px solid; font-weight:600; margin-bottom:1rem}
+.status .big{font-size:1.05rem; font-weight:700}
+.status .sub{font-size:.78rem; color:var(--muted); margin-top:.35rem; font-weight:500}
+.chip{display:inline-block; margin:3px 5px 3px 0; padding:2px 9px; border-radius:.55rem; font-size:.82rem;
+  font-weight:600; border:1px solid}
+.lev{display:inline-flex; align-items:center; gap:.3rem; font-weight:700}
+.dot2{width:9px;height:9px;border-radius:50%;display:inline-block}
+.tblwrap{overflow-x:auto}
+table{border-collapse:collapse; width:100%; font-size:.84rem; min-width:520px}
+th,td{text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--grid); vertical-align:top}
+th{font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600;
+  background:var(--panel2); position:sticky; top:0}
+tr:last-child td{border-bottom:0}
+td.t{white-space:nowrap; color:var(--muted); font-variant-numeric:tabular-nums}
+td.code{font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap}
+.empty{padding:1rem; color:var(--muted); font-size:.85rem}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--good);display:inline-block}
+.dot.stale{background:var(--warn)}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><span class="dot" id="fresh"></span>⚠️ Аварії та попередження</span>
+  <span class="spacer"></span>
+  <button class="iconbtn" id="reload" title="Оновити">⟳</button>
+  <button class="iconbtn" id="theme" title="Тема">🌙</button>
+  <a class="back" href="/">← Дашборд</a>
+</header>
+<main>
+  <div id="current"></div>
+
+  <div class="note">
+    Аварії/попередження інвертора (QPIWS). <b class="lev"><span class="dot2" style="background:var(--bad)"></span>Аварія</b>
+    — спрацював захист, інвертор зупинився або от-от зупиниться, треба реагувати.
+    <b class="lev"><span class="dot2" style="background:var(--warn)"></span>Попередження</b> — дорадчо/дерейтинг, працює далі.
+    <b class="lev"><span class="dot2" style="background:var(--good)"></span>Чисто</b> — активних немає.<br>
+    <b>Історія</b> ведеться поллером від моменту запуску (кожна <b>зміна</b> набору активних). Старіші події
+    (до появи поллера) можна довантажити з хмари DessMonitor — там у телеметрії є код аварії на кожен запис.
+    Сам інвертор історію <b>не зберігає</b>: QPIWS повертає лише поточний стан.
+  </div>
+
+  <div class="section">🕘 Історія змін</div>
+  <div class="card"><div class="tblwrap"><table>
+    <thead><tr><th>Час</th><th>Рівень</th><th>Що активне</th></tr></thead>
+    <tbody id="histbody"><tr><td class="empty" colspan="3">завантаження…</td></tr></tbody>
+  </table></div></div>
+
+  <div class="section">📖 Довідник кодів аварій (Axpert/VMIII)</div>
+  <div class="card"><div class="tblwrap"><table>
+    <thead><tr><th>Код</th><th>Значення</th><th>Рівень</th></tr></thead>
+    <tbody id="refbody"></tbody>
+  </table></div></div>
+</main>
+<script>
+// ---- labels + severity (mirror of the poller + dashboard) ----
+const WLABEL={inverter_fault:"Аварія інвертора",bus_over:"Перенапруга шини",bus_under:"Просадка шини",bus_soft_fail:"Збій старту шини",line_fail:"Немає мережі",opv_short:"КЗ на виході",inverter_voltage_low:"Низька напруга інвертора",inverter_voltage_high:"Висока напруга інвертора",over_temperature:"Перегрів",fan_locked:"Заклинив вентилятор",battery_voltage_high:"Висока напруга АКБ",battery_low_alarm:"Низький заряд АКБ",battery_under_shutdown:"Відключення: розряд АКБ",over_load:"Перевантаження",eeprom_fault:"Збій EEPROM",inverter_over_current:"Надструм інвертора",inverter_soft_fail:"Збій м'якого старту",self_test_fail:"Збій самотесту",op_dc_over_voltage:"DC на AC-виході",battery_open:"Обрив АКБ",current_sensor_fail:"Збій датчика струму",battery_short:"КЗ АКБ",power_limit:"Обмеження потужності",pv_voltage_high:"Висока напруга PV",mppt_overload_fault:"MPPT перевантаження (аварія)",mppt_overload_warning:"MPPT перевантаження",battery_too_low_to_charge:"АКБ надто розряджена для заряду"};
+const wlabel=n=>WLABEL[n]||String(n).replace(/_/g," ");
+const sevColor=s=>s==="fault"?"var(--bad)":s==="warning"?"var(--warn)":"var(--good)";
+const levWord=l=>l==="fault"?"КРИТИЧНО":l==="warning"?"попередження":"чисто";
+// Axpert numeric fault codes (the "Inverter Fault" field in DessMonitor exports)
+const FAULT_CODES=[["01","Вентилятор заблоковано (інвертор вимкнено)"],["02","Перегрів"],["03","Напруга АКБ зависока"],["04","Напруга АКБ занизька"],["05","КЗ на виході / перегрів"],["06","Вихідна напруга зависока"],["07","Перевантаження (тайм-аут)"],["08","Напруга шини зависока"],["09","Збій м'якого старту шини"],["10","Перевищення струму PV"],["11","Збій головного реле"],["51","Надструм інвертора"],["52","Напруга шини занизька"],["53","Збій м'якого старту інвертора"],["55","Перевищення DC на AC-виході"],["57","Збій датчика струму"],["58","Вихідна напруга занизька"],["60","Захист від зворотної потужності"],["71","Невідповідність версій прошивки"],["72","Помилка розподілу струму (parallel)"],["80","CAN-помилка"],["81","Втрата зв'язку (host)"],["82","Втрата синхронізації"]];
+
+function chip(a){ const c=sevColor(a.severity); return `<span class="chip" style="background:color-mix(in srgb,${c} 18%,transparent);color:${c};border-color:${c}">${wlabel(a.name)}</span>`; }
+function fmtT(ts){ return new Date(ts*1000).toLocaleString([],{year:"2-digit",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}); }
+
+function renderCurrent(w){
+  const el=document.getElementById("current"), active=(w&&w.active)||[];
+  const level=active.length?(w.level||"warning"):"ok", c=sevColor(level);
+  let inner;
+  if(active.length){
+    inner=`<div class="big" style="color:${c}">⚠ Активні: ${levWord(level)}</div><div>${active.map(chip).join("")}</div>`;
+  } else {
+    inner=`<div class="big" style="color:var(--good)">✓ Немає активних аварій</div>`;
+  }
+  const raw=(w&&w.raw)?`<div class="sub">QPIWS: <code>${w.raw}</code></div>`:"";
+  el.innerHTML=`<div class="status" style="border-color:${c};background:color-mix(in srgb,${c} 10%,transparent)">${inner}${raw}</div>`;
+}
+
+function renderHist(hist){
+  const body=document.getElementById("histbody");
+  if(!hist||!hist.length){ body.innerHTML=`<tr><td class="empty" colspan="3">Ще немає записів — журнал наповнюється з моменту запуску поллера.</td></tr>`; return; }
+  const rows=hist.slice().sort((a,b)=>b.ts-a.ts).map(e=>{
+    const c=sevColor(e.level), active=(e.active||[]);
+    const what=active.length?active.map(chip).join(""):`<span style="color:var(--good)">усунено ✓</span>`;
+    return `<tr><td class="t">${fmtT(e.ts)}</td><td><span class="lev"><span class="dot2" style="background:${c}"></span>${levWord(e.level)}</span></td><td>${what}</td></tr>`;
+  }).join("");
+  body.innerHTML=rows;
+}
+
+function renderRef(){
+  document.getElementById("refbody").innerHTML=FAULT_CODES.map(([code,txt])=>
+    `<tr><td class="code">${code}</td><td>${txt}</td><td><span class="lev"><span class="dot2" style="background:var(--bad)"></span>аварія</span></td></tr>`).join("");
+}
+
+async function load(){
+  try{
+    const [w,hist]=await Promise.all([
+      fetch("/warnings").then(r=>r.json()).catch(()=>({active:[],level:"ok"})),
+      fetch("/warnings/history").then(r=>r.json()).catch(()=>[])
+    ]);
+    renderCurrent(w); renderHist(hist);
+    document.getElementById("fresh").className="dot"+(w&&w.raw?"":" stale");
+  }catch(e){}
+}
+renderRef();
+document.getElementById("reload").addEventListener("click",load);
+document.getElementById("theme").addEventListener("click",()=>{
+  const cur=document.documentElement.getAttribute("data-theme");
+  const next=cur==="dark"?"light":(cur==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));
+  document.documentElement.setAttribute("data-theme",next); localStorage.setItem("theme",next);
+});
+{ const t=localStorage.getItem("theme"); if(t)document.documentElement.setAttribute("data-theme",t); }
+load();
+setInterval(load,15000);
+</script>
+</body>
+</html>
