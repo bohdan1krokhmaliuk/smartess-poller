@@ -343,7 +343,7 @@ const DESC={
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
  "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available for the whole day (forecast for the hours not yet passed); Appx unused today = the part you didn't use so far (est.); Cloud = current cloud cover.",
- "Produced vs predicted (error shaded)":"Lines: green = produced, blue = predicted (GTI), purple = load. Shaded = the real forecast error. RED (over-predict): shown when the load outran output — (load − produced) > 250 W if load < 500 W, else 100 W — which proves the panels were maxed (not throttled). The shaded amount = min(predicted, load) − produced (capped by load only when load < predicted). GREEN (under-predict): produced beat the forecast by > 50 W; amount = produced − predicted. Hover for the signed value in W.",
+ "Produced vs predicted (error shaded)":"Lines: green = produced, blue = predicted (GTI), purple = load. Shaded = the real forecast error. RED (over-predict): shown when the load outran output — (load − produced) > 250 W if load < 500 W, else 100 W — which proves the panels were maxed (not throttled). The shaded amount = min(predicted, load) − produced (capped by load only when load < predicted). GREEN (under-predict): produced beat the forecast; amount = produced − predicted. A ±20 W dead-zone hides noise near the crossing; otherwise the band is continuous. Hover for the signed value in W.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
@@ -507,11 +507,12 @@ class Chart{
     if(this.p.kind==="bars"){ const n=this.series.length,bms=this.bucketMs||864e5,bw=Math.max(2,(X(from+bms)-X(from))*0.72/n);
       this.series.forEach((s,si)=>{ x.fillStyle=resolveColor(s.color); s.pts.forEach(p=>{ const cx=X(p[0])+(si-(n-1)/2)*bw,y=YL(p[1]); x.fillRect(cx-bw/2, Math.min(y,base), bw, Math.abs(base-y)); }); }); x.restore(); this._X=X; this.drawOv(); return; }
     const baseGap=this.stepMs*2.5, histCut=Date.now()-2*86400000;   // >2 days old = historical (~5-min) -> connect up to 10 min; recent live (10s) uses baseGap as before
-    this.series.forEach(s=>{ if(!s.band||s.pts.length<2)return; const col=resolveColor(s.color);   // error bands: fill between yTop=p[1] and yBot=p[2]; drawn first so lines sit on top
-      segsAge(s.pts,baseGap,10*60000,histCut).forEach(seg=>{ if(seg.length<2)return;
+    this.series.forEach(s=>{ if(!s.band||!s.pts.length)return; const col=resolveColor(s.color); x.fillStyle=hexA(col,.30);   // error bands: fill between yTop=p[1] and yBot=p[2]; drawn first so lines sit on top
+      segsAge(s.pts,baseGap,10*60000,histCut).forEach(seg=>{     // dense series -> segments break only at real data gaps
+        if(seg.length<2){ const p=seg[0],px=X(p[0]),wp=Math.max(2,X(p[0]+this.stepMs)-px); x.fillRect(px-wp/2,Math.min(YL(p[1]),YL(p[2])),wp,Math.abs(YL(p[1])-YL(p[2]))); return; }   // lone point -> thin sliver
         x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=YL(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);});
         for(let i=seg.length-1;i>=0;i--)x.lineTo(X(seg[i][0]),YL(seg[i][2]));
-        x.closePath(); x.fillStyle=hexA(col,.30); x.fill(); }); });
+        x.closePath(); x.fill(); }); });
     this.series.forEach(s=>{ if(s.band||!s.pts.length)return; const Y=s.axis==="right"?YR:YL,col=resolveColor(s.color);
       segsAge(s.pts,baseGap,10*60000,histCut).forEach(seg=>{ if(s.fill&&seg.length>1){ x.beginPath(); seg.forEach((p,i)=>{const px=X(p[0]),py=Y(p[1]);i?x.lineTo(px,py):x.moveTo(px,py);}); x.lineTo(X(seg[seg.length-1][0]),base);x.lineTo(X(seg[0][0]),base);x.closePath();x.fillStyle=hexA(col,.16);x.fill(); }
         x.lineJoin="round";x.lineCap="round";x.lineWidth=s.width||1.4;
@@ -526,7 +527,7 @@ class Chart{
     const t=this.xToT(mx); let nt=null,nd=1e15; (this.series[0]&&this.series[0].pts||[]).forEach(p=>{const d=Math.abs(p[0]-t);if(d<nd){nd=d;nt=p[0];}});
     if(nt==null){G.t=null;G.active=null;broadcast();this.tip.style.opacity=0;return;} G.t=nt;G.active=this; CHARTS.forEach(c=>{if(c!==this)c.tip.style.opacity=0;}); broadcast();
     const rows=this.series.map(s=>{ if(!s.pts||!s.pts.length)return ""; let p;
-      if(s.band){ p=s.pts.find(q=>q[0]===nt); if(!p)return ""; }   // bands: only at the exact hovered point, so the error matches the shown produced/load
+      if(s.band){ p=s.pts.find(q=>q[0]===nt); if(!p||!p[3])return ""; }   // bands: only at the exact hovered point AND only where there's an actual error (p[3]≠0)
       else { p=null;let pd=1/0; for(const q of s.pts){const d=Math.abs(q[0]-nt); if(d<pd){pd=d;p=q;}} if(!p||pd>this.stepMs*2)return ""; }
       let val=s.band?((p[3]>0?"+":"")+fmt(p[3],s.unit||this.p.unit,s.dec??this.p.dec)):(this.p.map?(this.p.map[Math.round(p[1])]||["—"])[0]:fmt(p[1],s.unit||this.p.unit,s.dec??this.p.dec));
       return `<div class="row"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${resolveColor(s.color||(this.p.map?(this.p.map[Math.round(p[1])]||["","var(--muted)"])[1]:"var(--muted)"))}"></i> ${s.label}</span><b>${val}</b></div>`;}).join("");
@@ -663,8 +664,8 @@ const CLIENT={
     for(let t=from;t<to;t+=step){ const a=pvPotentialAt(new Date(t)); if(a!=null) wh+=a*step/3600000; } return wh/1000; },
   // current signed forecast error (same rule as the shaded chart): + = produced beat forecast, − = missed usable solar (capped by load)
   errNow: async()=>{ const a=pvPotentialW(); if(a==null)return null; const v=await qInstant(M.pvpow,Date.now()); if(v==null)return null;
-    const l=(await qInstant("inverter_ac_output_active_power",Date.now()))||0, thr=l<500?250:100, ceil=Math.min(a,l);
-    if(v-a>50)return v-a; if((l-v)>thr && a>v)return v-ceil; return 0; },
+    const l=(await qInstant("inverter_ac_output_active_power",Date.now()))||0, thr=l<500?250:100, ceil=Math.min(a,l), d=v-a;
+    if(d>20)return d; if(d<-20 && (l-v)>thr)return v-ceil; return 0; },
   // wasted = potential − produced, captured = produced/potential. Computed here (two separate
   // single-metric queries, subtracted in JS) because doing it in MetricsQL 422s on label mismatch.
   wastedKwh: async(w,at)=>{ at=at||Date.now(); const p=await qInstant(dv.potential(w),at), q=await qInstant(dv.pv(w),at); return p==null?null:Math.max(0,p-(q||0)); },
@@ -714,9 +715,10 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
         const avail=[], under=[], over=[];
         for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null);
           if(a==null) continue; avail.push([t,a]);
-          const l=ldM.get(t)||0, thr=l<500?250:100, ceil=Math.min(a,l);   // thr = min (load − produced) gap that proves the panels were maxed (not throttled)
-          if(v-a>50) under.push([t,v,a,v-a]);                     // produced beat the forecast (green band: top=produced, bottom=predicted; error = produced − predicted)
-          else if((l-v)>thr && a>v) over.push([t,ceil,v,v-ceil]); // panels maxed (load outran output) AND predicted>produced -> over-shot; shaded amount = min(predicted,load) − produced (capped by load only when load<predicted)
+          const l=ldM.get(t)||0, thr=l<500?250:100, ceil=Math.min(a,l), d=v-a;   // thr = min (load − produced) gap proving the panels were maxed; d = produced − predicted
+          const isU=d>20, isO=d<-20 && (l-v)>thr;        // 20 W dead-zone; over-shot also needs the load to have outrun output
+          under.push([t, v, isU?a:v, isU?d:0]);          // GREEN band: produced(top)..predicted(bottom) when under-shot, else zero-height — DENSE (a point every step) so it never bridges over the opposite colour
+          over.push([t, isO?ceil:v, v, isO?v-ceil:0]);   // RED band: min(predicted,load)(top)..produced(bottom) when over-shot, else zero-height
         }
         c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:ld||[]},{...p.series[3],pts:under},{...p.series[4],pts:over}]); }
       else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ if(histView) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // historical: real potential from the DB (backfilled weather)
