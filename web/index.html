@@ -748,17 +748,17 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const base=s.counter?`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(s.power?` or (avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000)`:``):`avg_over_time((${s.power})[${B}s:300s]) * ${B}/3600000`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
-      else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // available = solar potential (DB or client model); error shaded only where produced reflects true capability
+      else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // available always from the DB (same source/window as the GTI chart) so the two can't diverge
         const [pv,availVM,ld]=await Promise.all([
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
-          histView?qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st):Promise.resolve(null),
+          qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st),
           qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st) ]);   // house load
-        const availM=availVM?new Map(availVM.map(p=>[p[0],p[1]])):null, ldM=new Map((ld||[]).map(p=>[p[0],p[1]])), ldA=ld||[];
+        const availM=new Map((availVM||[]).map(p=>[p[0],p[1]])), ldM=new Map((ld||[]).map(p=>[p[0],p[1]])), ldA=ld||[];
         const loadAt=(t)=>{ const e=ldM.get(t); if(e!=null)return e;   // raw load where present; ONLY if a bucket is missing, use the mean of the two nearest samples (no smoothing of real values)
           let lo=0,hi=ldA.length-1,bi=-1; while(lo<=hi){const m=(lo+hi)>>1; if(ldA[m][0]<=t){bi=m;lo=m+1;}else hi=m-1;}
           const b=bi>=0?ldA[bi]:null, u=bi+1<ldA.length?ldA[bi+1]:null; return b&&u?(b[1]+u[1])/2:(b||u||[0,0])[1]; };
         const avail=[], under=[], over=[];
-        for(const [t,v] of pv){ const a=availM?(availM.has(t)?availM.get(t):null):(conf?pvPotentialAt(new Date(t)):null);
+        for(const [t,v] of pv){ const a=availM.has(t)?availM.get(t):(conf?pvPotentialAt(new Date(t)):null);   // DB potential; client model only fills the last point if the DB hasn't written it yet
           if(a==null) continue; avail.push([t,a]);
           const l=loadAt(t), thr=l<500?250:100, ceil=Math.min(a,l);   // raw load (interpolated only when a bucket is missing)
           const isU=v>a, isO=v<a && (l-v)>thr;   // GREEN: produced beat the forecast -> always real (making more than predicted can't be curtailment). RED: below forecast AND load outran output (proves not throttled)
@@ -766,8 +766,7 @@ async function refresh(){ const now=Date.now(),{from,to}=range(),st=stepSec(),{e
           over.push([t, isO?ceil:v, v, isO?v-ceil:0]);   // RED band: min(predicted,load)(top)..produced(bottom); zero-height otherwise
         }
         c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:ld||[]},{...p.series[3],pts:under},{...p.series[4],pts:over}]); }
-      else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail){ if(histView) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // historical: real potential from the DB (backfilled weather)
-        const conf=pvPotentialW()!=null,pts=[]; if(conf)for(let t=from;t<=to;t+=st*1000){ const a=pvPotentialAt(new Date(t)); if(a!=null)pts.push([t,a]); } return {...s,pts}; }   // recent: client weather-model available solar
+      else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // always from the DB (recent + historical) -> matches the GTI chart
         const ag=s.agg||p.agg||AGG; const w2=s.wx?Math.max(st,3900):aw; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${w2}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
