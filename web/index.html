@@ -44,6 +44,16 @@ body.kiosk header{display:none}
 .popover label{display:block; font-size:.72rem; color:var(--muted); margin:.3rem 0 .1rem}
 .popover input{width:100%; padding:.35rem; border:1px solid var(--border); border-radius:.4rem; background:var(--panel2); color:var(--text); font-size:.82rem}
 .popover .apply{margin-top:.55rem; width:100%; border:0; background:var(--accent); color:#fff; padding:.45rem; border-radius:.5rem; font-weight:700; cursor:pointer}
+#popover{min-width:252px}
+.popttl{font-weight:700; font-size:.82rem; margin-bottom:.45rem}
+.popq{display:flex; flex-wrap:wrap; gap:.3rem; margin-bottom:.5rem}
+.popq button{flex:1 1 44%; border:1px solid var(--border); background:var(--panel2); color:var(--text); border-radius:.45rem; padding:.34rem .4rem; font-size:.72rem; font-weight:600; cursor:pointer; white-space:nowrap; transition:border-color .12s,color .12s}
+.popq button:hover{border-color:var(--accent); color:var(--accent)}
+.poprow{display:flex; gap:.35rem; align-items:center}
+.poprow input{flex:1 1 auto}
+#cnow{flex:0 0 auto; border:1px solid var(--border); background:var(--panel2); color:var(--text); border-radius:.4rem; padding:.35rem .5rem; font-size:.74rem; font-weight:600; cursor:pointer}
+#cnow:hover{border-color:var(--accent); color:var(--accent)}
+.poperr{color:var(--bad); font-size:.7rem; min-height:.9rem; margin:.25rem 0 0}
 .mode{display:inline-flex; align-items:center; gap:.35rem; font-size:.82rem; color:var(--muted)}
 .badge{padding:.24rem .55rem; border-radius:.5rem; font-weight:700; font-size:.78rem; color:#fff; letter-spacing:.02em}
 .badge.local{background:var(--accent)} .badge.mirror{background:var(--good)} .badge.unknown{background:var(--muted)}
@@ -141,7 +151,14 @@ body{padding-bottom:96px}
   <div id="tbStrip"><div id="tbTicks"></div><div id="tbNow"></div><div id="tbWin"><i class="tbH" data-h="l"></i><i class="tbH" data-h="r"></i></div></div>
   <div id="tbAxis"></div>
 </div>
-<div class="popover" id="popover"><label>From</label><input type="datetime-local" id="cfrom"><label>To</label><input type="datetime-local" id="cto"><button class="apply" id="capply">Apply</button></div>
+<div class="popover" id="popover">
+  <div class="popttl">Custom period</div>
+  <div class="popq"><button data-q="yesterday">Yesterday</button><button data-q="7d">Last 7 days</button><button data-q="30d">Last 30 days</button><button data-q="thismonth">This month</button></div>
+  <label>From</label><input type="datetime-local" id="cfrom">
+  <label>To</label><div class="poprow"><input type="datetime-local" id="cto"><button id="cnow" title="Set to current time">Now</button></div>
+  <div class="poperr" id="poperr"></div>
+  <button class="apply" id="capply">Apply</button>
+</div>
 
 <script>
 "use strict";
@@ -917,8 +934,18 @@ document.addEventListener("keydown",e=>{ if(!(e.metaKey||e.ctrlKey))return; if(/
 document.getElementById("refreshNow").addEventListener("click",refresh);
 document.querySelectorAll("#refreshSel button").forEach(b=>b.addEventListener("click",()=>{ document.querySelectorAll("#refreshSel button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); state.autoMs=+b.dataset.ms; clearInterval(state.timer); if(state.autoMs)state.timer=setInterval(tick,state.autoMs); }));
 const pop=document.getElementById("popover"),cbtn=document.getElementById("customBtn"); const toInput=ms=>new Date(ms-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
-cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); const r=cbtn.getBoundingClientRect(); pop.style.left=Math.max(6,Math.min(r.left,innerWidth-240))+"px"; pop.style.bottom=(innerHeight-r.top+6)+"px"; } pop.classList.toggle("open",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
-document.getElementById("capply").addEventListener("click",()=>{ const f=new Date(document.getElementById("cfrom").value).getTime(),t=new Date(document.getElementById("cto").value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); setAbs(f,t); } });
+cbtn.addEventListener("click",()=>{ const open=!pop.classList.contains("open"); if(open){ const {from,to}=range(); document.getElementById("cfrom").value=toInput(from); document.getElementById("cto").value=toInput(to); const r=cbtn.getBoundingClientRect(); pop.style.left=Math.max(6,Math.min(r.left,innerWidth-258))+"px"; pop.style.bottom=(innerHeight-r.top+6)+"px"; popValidate(); } pop.classList.toggle("open",open); });   // always open the picker; reset to live is done via a preset (e.g. 6h)
+const cfrom=document.getElementById("cfrom"), cto=document.getElementById("cto"), capply=document.getElementById("capply"), poperr=document.getElementById("poperr");
+function popValidate(){ const f=new Date(cfrom.value).getTime(), t=new Date(cto.value).getTime(), ok=isFinite(f)&&isFinite(t)&&t>f; poperr.textContent=(isFinite(f)&&isFinite(t)&&t<=f)?"«To» must be after «From»":""; capply.disabled=!ok; capply.style.opacity=ok?"":".5"; }
+cfrom.addEventListener("input",popValidate); cto.addEventListener("input",popValidate);
+document.getElementById("cnow").addEventListener("click",()=>{ cto.value=toInput(Date.now()); popValidate(); });
+document.querySelectorAll("#popover .popq button").forEach(b=>b.addEventListener("click",()=>{ const q=b.dataset.q, now=Date.now(), d=new Date(); d.setHours(0,0,0,0); let f,t;
+  if(q==="yesterday"){ t=d.getTime()-1; d.setDate(d.getDate()-1); f=d.getTime(); }
+  else if(q==="7d"){ t=now; f=now-7*864e5; }
+  else if(q==="30d"){ t=now; f=now-30*864e5; }
+  else { d.setDate(1); f=d.getTime(); t=now; }   // this month
+  pop.classList.remove("open"); setAbs(f,t); }));
+capply.addEventListener("click",()=>{ const f=new Date(cfrom.value).getTime(),t=new Date(cto.value).getTime(); if(isFinite(f)&&isFinite(t)&&t>f){ pop.classList.remove("open"); setAbs(f,t); } });
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
 cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ const S=(id,v)=>document.getElementById(id).value=(v==null?"":v); S("tariff",TARIFF||""); document.getElementById("currency").value=CUR; S("pvmax",PVMAX||""); S("pvlat",PVLAT); S("pvlon",PVLON); S("pvkwp",PVKWP||""); S("pvtilt",PVTILT); S("pvaz",PVAZ); document.getElementById("agg").value=AGG; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
