@@ -202,11 +202,13 @@ const PV_NOCT=45, PV_TEMP_COEFF=0.004, PV_BASE_DERATE=0.90;
 function pvDerate(gti,tAir){ if(tAir==null)return PV_BASE_DERATE;
   const tCell=tAir+(gti/800)*(PV_NOCT-20);
   return Math.max(0.5,Math.min(1.05, PV_BASE_DERATE*(1-PV_TEMP_COEFF*(tCell-25)))); }
-// Inverter MPPT floor: below ~110 W/m² GTI the array's operating voltage falls under the inverter's minimum
-// (~120 V) and it stops harvesting entirely — so the predicted "potential" must roll off to 0 near the day edges
-// (measured on this VMIII: 0% harvest below 150 W/m², full by ~200). Without this, predicted floats at 100–600 W
-// through sunrise/sunset while the array makes nothing, showing a false growing error.
-const PV_HARVEST_ON=110, PV_HARVEST_SPAN=90;   // 0 below 110 W/m², linear ramp, full at 200
+// Low-sun rolloff: near sunrise/sunset the array delivers increasingly less than the flat GTI model predicts —
+// grazing incidence angle + the inverter's ~120 V MPPT floor (PV volts sag and it stops tracking). Measured on
+// this array (maxed, uncurtailed samples): output/predicted tracks GTI closely — ~1.0 above 300 W/m², 0.85@275,
+// 0.7@245, 0.45@215, ~0 below 110 — so we ramp the predicted potential 0→1 across GTI 110→300. This is a proxy
+// for sun elevation, which is the true driver; it's safe here because midday GTI is never below 300 (0 such
+// samples in 30 days), so the rolloff only ever touches the genuine low-sun tails, not cloudy middays.
+const PV_HARVEST_ON=110, PV_HARVEST_SPAN=190;   // 0 below 110 W/m², linear ramp, full at 300
 function pvHarvest(irr){ return irr==null?1:Math.max(0,Math.min(1,(irr-PV_HARVEST_ON)/PV_HARVEST_SPAN)); }
 const POTW=`(weather_pv_potential_w * clamp_max(clamp_min((weather_gti - ${PV_HARVEST_ON})/${PV_HARVEST_SPAN}, 0), 1))`;   // harvestable predicted power (W), same as pvHarvest() but in MetricsQL
 function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
