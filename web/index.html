@@ -331,7 +331,7 @@ const SECTIONS=[
      {label:"Avg cloud",dyn:w=>`avg_over_time(weather_cloud[${w}s])`,unit:"%",dec:0,color:"var(--muted)"}]},
    {t:"sky",title:"Sun path & sky",span:3},
    {t:"chart",pvhead:1,title:"Produced vs predicted (error shaded)",unit:"W",span:9,series:[
-     {label:"produced",color:C.pv},{label:"available (predicted)",color:"#3b82f6"},{label:"load",color:C.cons},
+     {label:"load",color:C.cons},{label:"generated",color:C.pv},{label:"predicted",color:"#3b82f6"},
      {label:"under-shot (produced > predicted)",color:C.pv,band:1},{label:"over-shot (missed usable solar)",color:"#ef4444",band:1}]},
    {t:"chart",title:"Irradiance — GTI (W/m²)",unit:"W/m²",span:12,series:[{expr:"weather_gti",label:"GTI on the array plane",color:"#f59e0b",wx:1}]},
  ]},
@@ -862,7 +862,7 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
           under.push([t, v, isU?a:v, isU?v-a:0]);        // GREEN band: produced(top)..predicted(bottom); zero-height otherwise — DENSE (a point every step) so it never bridges over the opposite colour
           over.push([t, isO?ceil:v, v, isO?v-ceil:0]);   // RED band: min(predicted,load)(top)..produced(bottom); zero-height otherwise
         }
-        c.chart.setData([{...p.series[0],pts:pv},{...p.series[1],pts:avail},{...p.series[2],pts:ld||[]},{...p.series[3],pts:under},{...p.series[4],pts:over}]); }
+        c.chart.setData([{...p.series[0],pts:ld||[]},{...p.series[1],pts:pv},{...p.series[2],pts:avail},{...p.series[3],pts:under},{...p.series[4],pts:over}]); }   // series order = tooltip order: load, generated, predicted, then the error bands
       else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // always from the DB (recent + historical) -> matches the GTI chart
         const ag=s.agg||p.agg||AGG; const w2=s.wx?Math.max(st,3900):aw; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${w2}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
