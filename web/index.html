@@ -136,7 +136,6 @@ body{padding-bottom:96px}
     <button class="modebtn" data-mode="mirror" title="SmartESS app works">MIRROR</button>
   </div>
   <div class="spacer"></div>
-  <button class="iconbtn" id="alignBtn" title="Predicted model: v2 aligned (low-sun rolloff + adaptive smoothing) vs v1 raw" style="width:auto;padding:0 8px;font-size:.62rem;font-weight:600;letter-spacing:.02em">v2</button>
   <span class="rel"><button class="iconbtn" id="cfgBtn" title="Settings">⚙</button>
     <div class="popover" id="cfgPop"><label>Tariff (per kWh)</label><input type="number" step="0.01" id="tariff">
       <label>Currency</label><input type="text" id="currency" maxlength="4">
@@ -210,9 +209,10 @@ function pvDerate(gti,tAir){ if(tAir==null)return PV_BASE_DERATE;
 // for sun elevation, which is the true driver; it's safe here because midday GTI is never below 300 (0 such
 // samples in 30 days), so the rolloff only ever touches the genuine low-sun tails, not cloudy middays.
 const PV_HARVEST_ON=110, PV_HARVEST_SPAN=190;   // 0 below 110 W/m², linear ramp, full at 300
-// A/B toggle for the whole "alignment" (low-sun rolloff + density-adaptive smoothing). v2=aligned (default) vs
-// v1=raw (predicted = raw weather potential, fixed 65-min smoothing, no harvest factor). Lets you compare directly.
-let PVALIGN=localStorage.getItem("pvalign")!=="0";
+// Toggle (button on the "Produced vs predicted" chart) for the low-sun prediction adjustment. OFF = raw weather
+// potential + fixed 65-min smoothing (default). ON = harvest rolloff (potential × harvest(gti)) + density-adaptive
+// smoothing — the predicted line adjusted to what the inverter can actually harvest near sunrise/sunset.
+let PVALIGN=localStorage.getItem("pvalign")==="1";
 function pvHarvest(irr){ return (!PVALIGN||irr==null)?1:Math.max(0,Math.min(1,(irr-PV_HARVEST_ON)/PV_HARVEST_SPAN)); }
 function POTW(){ return PVALIGN?`(weather_pv_potential_w * clamp_max(clamp_min((weather_gti - ${PV_HARVEST_ON})/${PV_HARVEST_SPAN}, 0), 1))`:`weather_pv_potential_w`; }   // harvestable predicted power (v2) or raw (v1)
 function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
@@ -652,6 +652,12 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
   if(collapsed.has(sec.name)){ grid.classList.add("hidden"); head.classList.add("collapsed"); }
   for(const p of sec.panels){ const card=document.createElement("div");card.className="card"+(p.t==="chart"?" chart":"")+(p.t==="info"?" info":"")+(p.t==="gauge2"?" dual":"");card.style.gridColumn="span "+(p.span||3); if(p.optional)card.style.display="none";
     const title=document.createElement("h3");title.textContent=p.title; const dsc=p.desc||DESC[p.title]; if(dsc)title.dataset.tip=dsc; card.append(title);
+    if(p.pvhead){ card.style.position="relative";   // toggle: adjust the predicted line for the inverter's real low-sun harvest
+      const ab=document.createElement("button"); ab.textContent="realistic";
+      ab.title="Predicted line — how to read it:\n• OFF: raw weather-model potential — the theoretical ceiling from sun angle + clouds.\n• ON (realistic): adjusted to what THIS inverter can actually harvest. Near sunrise/sunset the array voltage sags below the inverter's ~120 V MPPT floor and it stops tracking, so real output falls to 0 well before the model's potential does. The predicted line is rolled off across GTI 110→300 W/m² to match, and smoothed to the real data density.\nTurn ON to compare produced against the producible ceiling; OFF to see the full solar potential.";
+      ab.style.cssText="position:absolute;top:9px;right:11px;font-size:.6rem;font-weight:600;padding:2px 9px;border-radius:10px;cursor:pointer;text-transform:none;letter-spacing:.02em;z-index:3";
+      const paint=()=>{ ab.style.background=PVALIGN?"var(--accent)":"transparent"; ab.style.color=PVALIGN?"#fff":"var(--muted)"; ab.style.border="1px solid "+(PVALIGN?"var(--accent)":"var(--grid)"); };
+      paint(); ab.addEventListener("click",e=>{ e.stopPropagation(); PVALIGN=!PVALIGN; localStorage.setItem("pvalign",PVALIGN?"1":"0"); paint(); refresh(); }); card.append(ab); }
     if(p.t==="chart"){ const body=document.createElement("div");body.className="chartwrap"+(p.kind==="timeline"?" tl":"");card.append(body);
       const leg=document.createElement("div");leg.className="legend";card.append(leg);
       const legItems=(p.kind==="timeline"?Object.values(p.map).map(m=>({label:m[0],color:m[1]})):p.series).map(s=>{const sp=document.createElement("span");const ic=document.createElement("i");ic.style.background=resolveColor(s.color);sp.append(ic,document.createTextNode(s.label));leg.append(sp);return {ic,color:s.color};});
@@ -1068,9 +1074,6 @@ document.getElementById("calNext").addEventListener("click",()=>{ calView.setMon
 cfrom.addEventListener("change",calFromInputs); cto.addEventListener("change",calFromInputs);
 // settings
 const cfgPop=document.getElementById("cfgPop"),cfgBtn=document.getElementById("cfgBtn");
-function syncAlignBtn(){ const b=document.getElementById("alignBtn"); if(!b)return; b.textContent=PVALIGN?"v2":"v1"; b.classList.toggle("on",PVALIGN); b.style.opacity=PVALIGN?"1":".6"; }
-document.getElementById("alignBtn").addEventListener("click",()=>{ PVALIGN=!PVALIGN; localStorage.setItem("pvalign",PVALIGN?"1":"0"); syncAlignBtn(); refresh(); });
-syncAlignBtn();
 cfgBtn.addEventListener("click",()=>{ const open=!cfgPop.classList.contains("open"); if(open){ const S=(id,v)=>document.getElementById(id).value=(v==null?"":v); S("tariff",TARIFF||""); document.getElementById("currency").value=CUR; S("pvmax",PVMAX||""); S("pvlat",PVLAT); S("pvlon",PVLON); S("pvkwp",PVKWP||""); S("pvtilt",PVTILT); S("pvaz",PVAZ); document.getElementById("agg").value=AGG; } cfgPop.classList.toggle("open",open); cfgBtn.classList.toggle("on",open); });
 document.getElementById("cfgApply").addEventListener("click",()=>{ const V=id=>document.getElementById(id).value; const setNum=(k,id)=>{ const v=V(id); if(v===""){localStorage.removeItem(k);return null;} const n=parseFloat(v); if(isNaN(n)){localStorage.removeItem(k);return null;} localStorage.setItem(k,n); return n; };
   TARIFF=parseFloat(V("tariff"))||0; CUR=V("currency")||"₴"; PVMAX=parseFloat(V("pvmax"))||0; localStorage.setItem("tariff",TARIFF); localStorage.setItem("currency",CUR); localStorage.setItem("pvmax",PVMAX);
