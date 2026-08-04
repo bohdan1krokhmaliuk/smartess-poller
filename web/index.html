@@ -332,7 +332,7 @@ const SECTIONS=[
    {t:"sky",title:"Sun path & sky",span:3},
    {t:"chart",pvhead:1,title:"Produced vs predicted (error shaded)",unit:"W",span:9,series:[
      {label:"load",color:C.cons},{label:"generated",color:C.pv},{label:"predicted",color:"#3b82f6"},
-     {label:"under-shot (produced > predicted)",color:C.pv,band:1},{label:"over-shot (missed usable solar)",color:"#ef4444",band:1}]},
+     {label:"above predicted",color:C.pv,band:1},{label:"lost solar",color:"#ef4444",band:1}]},
    {t:"chart",title:"Irradiance — GTI (W/m²)",unit:"W/m²",span:12,series:[{expr:"weather_gti",label:"GTI on the array plane",color:"#f59e0b",wx:1}]},
  ]},
  {name:"🔋 Battery", battmode:1, panels:[
@@ -410,7 +410,7 @@ const DESC={
  "Status":"Working mode (Line/Battery/…), health (OK/FAULT) and heatsink temperature at a glance.",
  "Cost today":"Today's cost: Total = all consumption × tariff, Solar saved = value of the solar-covered part, Grid = grid energy × tariff.",
  "Headroom":"Spare solar vs what you use. Available = weather-model irradiance for your array now (includes cloud cover); Spare = available − current PV; PV peak = highest PV over the selected range; Appx solar today = modelled solar energy available for the whole day (forecast for the hours not yet passed); Appx unused today = the part you didn't use so far (est.); Cloud = current cloud cover.",
- "Produced vs predicted (error shaded)":"Lines: green = produced, blue = predicted (GTI), purple = load. GREEN = produced beat the forecast (produced > predicted) — always shaded, since making more than predicted can't be curtailment; amount = produced − predicted. RED = produced below predicted, but only when the load outran output — (load − produced) > 250 W if load < 500 W, else 100 W — which proves the panels were maxed (not just curtailed with a full battery); amount = min(predicted, load) − produced. Otherwise nothing is shaded. Hover for the signed value in W.",
+ "Produced vs predicted (error shaded)":"Lines: green = generated, blue = predicted (GTI), purple = load. “above predicted” (green) = generated beat the forecast (generated > predicted) — always shaded, since making more than predicted can't be curtailment; amount = generated − predicted. “lost solar” (red) = generated below predicted, but only when the load outran output — (load − generated) > 250 W if load < 500 W, else 100 W — which proves the panels were maxed (not just curtailed with a full battery); amount = min(predicted, load) − generated. Otherwise nothing is shaded. Hover for the signed value in W.",
  "Sun path & sky":"Today's sun path across the sky, the current sun position, your panel direction (blue) and current cloud cover.",
  "Cost over time":"Estimated cost per time bucket — total consumption cost and the grid portion.",
  "Generated":"Solar energy produced over the selected time range.",
