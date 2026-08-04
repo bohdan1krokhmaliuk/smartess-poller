@@ -849,10 +849,13 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
   try{ drawTimeline(); }catch(e){}
   const histView=to<now-2*86400000;   // whole visible window older than ~2 days -> historical (~5-min cloud data + backfilled weather)
   const aw=histView?Math.max(st,360):st;   // aggregate over >=6 min so every step point catches a sample -> lines stay visible when zoomed in; live data uses st unchanged
-  // predicted/weather smoothing: recent weather is 5-min, so a 15-min window tracks the real curve (the low-sun rolloff
-  // actually drops to 0 at sunset instead of a 65-min average smearing it back up); historical/backfilled weather is
-  // hourly, so it still needs the wide 65-min window to bridge the gaps without the line breaking up.
-  const wxw=histView?Math.max(st,3900):Math.max(st,900);
+  // predicted/weather smoothing adapts to the ACTUAL weather-sample density IN VIEW, not a fixed age cutoff: recent
+  // weather is 5-min (a ~15-min window keeps the low-sun rolloff sharp), but genuinely old backfilled weather is hourly
+  // and needs a wide window to bridge gaps. A 2-day cutoff wrongly smeared 5-min days from 3–5 days ago; density is
+  // the right signal (it also handles a sparse day inside an otherwise dense range). ~3 samples per bucket, capped.
+  let wxw;
+  try{ const wxN=await qInstant(`count_over_time(weather_gti[${win}s])`,evalT); const sp=(wxN&&wxN>0)?win/wxN:3600; wxw=Math.max(st,Math.min(3900,Math.round(sp*3))); }
+  catch(e){ wxw=Math.max(st,900); }
   { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
   await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
