@@ -1123,11 +1123,13 @@ def period_energy(key, frm, to):
         return 0.0
     cS = _en_counter_start(counter)
     total = 0.0
-    if cS is not None and to > cS:                       # counter era → exact lifetime delta
-        a = _en_inst("last_over_time(%s[2h])" % counter, max(frm, cS) / 1000.0)
-        b = _en_inst("last_over_time(%s[2h])" % counter, to / 1000.0)
-        if a is not None and b is not None and b >= a:
-            total += b - a
+    if cS is not None and to > cS:                       # counter era → max-min of the monotonic counter over [max(frm,cS), to]
+        cfrom = max(frm, cS)                             # (NOT last_over_time at each end: if the window's edge falls in an
+        w = int(round((to - cfrom) / 1000))              #  inverter-off stretch, that read is null and the whole delta is lost,
+        if w > 0:                                        #  which zeroed Generated for any window spanning an off period)
+            d = _en_inst("max_over_time(%s[%ds]) - min_over_time(%s[%ds])" % (counter, w, counter, w), to / 1000.0)
+            if d is not None and d >= 0:
+                total += d
     bf_end = cS if (cS is not None and cS < to) else to  # pre-counter (backfill) portion
     if bf_end <= frm:
         return total
