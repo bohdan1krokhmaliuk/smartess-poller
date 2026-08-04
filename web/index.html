@@ -202,15 +202,22 @@ const PV_NOCT=45, PV_TEMP_COEFF=0.004, PV_BASE_DERATE=0.90;
 function pvDerate(gti,tAir){ if(tAir==null)return PV_BASE_DERATE;
   const tCell=tAir+(gti/800)*(PV_NOCT-20);
   return Math.max(0.5,Math.min(1.05, PV_BASE_DERATE*(1-PV_TEMP_COEFF*(tCell-25)))); }
+// Inverter MPPT floor: below ~110 W/m² GTI the array's operating voltage falls under the inverter's minimum
+// (~120 V) and it stops harvesting entirely — so the predicted "potential" must roll off to 0 near the day edges
+// (measured on this VMIII: 0% harvest below 150 W/m², full by ~200). Without this, predicted floats at 100–600 W
+// through sunrise/sunset while the array makes nothing, showing a false growing error.
+const PV_HARVEST_ON=110, PV_HARVEST_SPAN=90;   // 0 below 110 W/m², linear ramp, full at 200
+function pvHarvest(irr){ return irr==null?1:Math.max(0,Math.min(1,(irr-PV_HARVEST_ON)/PV_HARVEST_SPAN)); }
+const POTW=`(weather_pv_potential_w * clamp_max(clamp_min((weather_gti - ${PV_HARVEST_ON})/${PV_HARVEST_SPAN}, 0), 1))`;   // harvestable predicted power (W), same as pvHarvest() but in MetricsQL
 function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
   const g=gtiAt(d.getTime());
-  if(g!=null) return Math.round(PVKWP*g*pvDerate(g,tempAt(d.getTime())));   // tilted irradiance (clouds modelled) × temperature-aware derate
+  if(g!=null) return Math.round(PVKWP*g*pvDerate(g,tempAt(d.getTime()))*pvHarvest(g));   // tilted irradiance (clouds modelled) × temp derate × inverter harvest floor
   const {el,az}=solarElevAz(PVLAT,PVLON,d); if(el<=2)return 0;   // fallback (offline): clear-sky geometry × cloud-cover factor
   const r=Math.PI/180, AM=1/Math.sin(el*r), DNI=1000*Math.pow(0.7,Math.pow(AM,0.678));
   const tilt=(PVTILT==null?30:PVTILT), paz=(PVAZ==null?180:PVAZ);
   const cosAOI=Math.sin(el*r)*Math.cos(tilt*r)+Math.cos(el*r)*Math.sin(tilt*r)*Math.cos((az-paz)*r);
   const POA=DNI*Math.max(0,cosAOI)+0.1*DNI*(1+Math.cos(tilt*r))/2;
-  return Math.round(PVKWP*POA*1.03*cloudFactor(cloudAt(d.getTime()))); }
+  return Math.round(PVKWP*POA*1.03*cloudFactor(cloudAt(d.getTime()))*pvHarvest(POA)); }
 function pvPotentialW(){ return pvPotentialAt(new Date()); }
 
 // settings shared across clients via the poller's /settings (localStorage is the local cache)
@@ -253,7 +260,7 @@ dv.gridCost=w=>`(${dv.grid(w)})*${TARIFF}`;
 dv.savings=w=>`clamp_min((${dv.cons(w)})-(${dv.grid(w)}),0)*${TARIFF}`;
 dv.total=w=>`(${dv.cons(w)})*${TARIFF}`;
 // solar potential energy (kWh) from the weather ceiling, and how much of it was actually captured
-dv.potential=w=>`avg_over_time(weather_pv_potential_w[${w}s]) * ${w}/3600000`;
+dv.potential=w=>`avg_over_time(${POTW}[${w}s]) * ${w}/3600000`;
 // "wasted"/"captured" are derived CLIENT-side (CLIENT.wastedKwh / capturedPct): subtracting
 // weather_* by inverter_* inside MetricsQL fails — the two carry different `topic` labels, so
 // VM rejects the binary op with 422 (surfaced as a 502 through the poller proxy).
@@ -324,8 +331,8 @@ const SECTIONS=[
    {t:"multi",title:"☀ This period",span:3,items:[
      {label:"Pred. err (measured)",client:"errPctRange",unit:"%",dec:0,color:"var(--muted)"},
      {label:"Pred. err (whole)",client:"errPctPeriod",unit:"%",dec:0,color:"var(--muted)"},
-     {label:"Avg available",dyn:w=>`avg_over_time(weather_pv_potential_w[${w}s])`,unit:"W",color:"#3b82f6"},
-     {label:"Potential peak",dyn:w=>`max_over_time(weather_pv_potential_w[${w}s])`,unit:"W",color:"#3b82f6"},
+     {label:"Avg available",dyn:w=>`avg_over_time(${POTW}[${w}s])`,unit:"W",color:"#3b82f6"},
+     {label:"Potential peak",dyn:w=>`max_over_time(${POTW}[${w}s])`,unit:"W",color:"#3b82f6"},
      {label:"PV peak",dyn:dv.pvPeak,unit:"W",color:C.pv},
      {label:"Avg irradiance",dyn:w=>`avg_over_time(weather_gti[${w}s])`,unit:"W/m²",dec:0,color:"#f59e0b"},
      {label:"Avg cloud",dyn:w=>`avg_over_time(weather_cloud[${w}s])`,unit:"%",dec:0,color:"var(--muted)"}]},
@@ -368,7 +375,7 @@ const SECTIONS=[
  ]},
  {name:"📈 History & state", panels:[
    {t:"chart",kind:"bars",title:"Energy over time (kWh)",unit:"kWh",span:12,series:[
-     {power:"weather_pv_potential_w",label:"potential",color:"#3b82f6"},
+     {power:POTW,label:"potential",color:"#3b82f6"},
      {counter:"energymeter_pv_total",power:"inverter_pv_input_voltage*inverter_pv_input_current",label:"generated",color:C.pv},
      {counter:"energymeter_consumed_total",power:"inverter_ac_output_active_power",label:"consumed",color:C.cons}]},
    {t:"chart",kind:"timeline",title:"Mode timeline",span:12,map:MODE_MAP,series:[{expr:M.mode,label:"mode"}]},
@@ -774,7 +781,7 @@ const CLIENT={
   errPctRange: async(win,at)=>{ const to=at||Date.now(), from=to-win*1000, step=Math.max(win>172800?Math.round(win/288):300,60);
     const [pv,av,ld]=await Promise.all([
       qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step),
-      qRange(`avg_over_time(weather_pv_potential_w[${Math.max(step,3900)}s])`,from,to,step),
+      qRange(`avg_over_time(${POTW}[${Math.max(step,3900)}s])`,from,to,step),
       qRange(`avg_over_time((inverter_ac_output_active_power)[${step}s])`,from,to,step)]);
     const avM=new Map(av.map(p=>[p[0],p[1]])), ldM=new Map(ld.map(p=>[p[0],p[1]])); let sp=0,sc=0;
     for(const [t,v] of pv){ const a=avM.get(t); if(a==null||a<50)continue;
@@ -787,7 +794,7 @@ const CLIENT={
   errPctPeriod: async(win,at)=>{ const to=at||Date.now(), from=to-win*1000, step=Math.max(win>172800?Math.round(win/288):300,60);
     const [pv,av,ld]=await Promise.all([
       qRange(`avg_over_time((${M.pvpow})[${step}s])`,from,to,step),
-      qRange(`avg_over_time(weather_pv_potential_w[${Math.max(step,3900)}s])`,from,to,step),
+      qRange(`avg_over_time(${POTW}[${Math.max(step,3900)}s])`,from,to,step),
       qRange(`avg_over_time((inverter_ac_output_active_power)[${step}s])`,from,to,step)]);
     const avM=new Map(av.map(p=>[p[0],p[1]])), ldM=new Map(ld.map(p=>[p[0],p[1]])); let num=0,den=0;
     for(const [t,v] of pv){ const a=avM.get(t); if(a==null||a<50)continue;   // no weather data here -> not part of the formula
@@ -848,7 +855,7 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
       else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=Math.max(st,3900);   // available always from the DB (same source/window as the GTI chart) so the two can't diverge
         const [pv,availVM,ld]=await Promise.all([
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
-          qRange(`avg_over_time(weather_pv_potential_w[${ww}s])`,from,to,st),
+          qRange(`avg_over_time(${POTW}[${ww}s])`,from,to,st),
           qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st) ]);   // house load
         const availM=new Map((availVM||[]).map(p=>[p[0],p[1]])), ldM=new Map((ld||[]).map(p=>[p[0],p[1]])), ldA=ld||[];
         const loadAt=(t)=>{ const e=ldM.get(t); if(e!=null)return e;   // raw load where present; ONLY if a bucket is missing, use the mean of the two nearest samples (no smoothing of real values)
@@ -863,7 +870,7 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
           over.push([t, isO?ceil:v, v, isO?v-ceil:0]);   // RED band: min(predicted,load)(top)..produced(bottom); zero-height otherwise
         }
         c.chart.setData([{...p.series[0],pts:ld||[]},{...p.series[1],pts:pv},{...p.series[2],pts:avail},{...p.series[3],pts:under},{...p.series[4],pts:over}]); }   // series order = tooltip order: load, generated, predicted, then the error bands
-      else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail) return {...s,pts:await qRange(`avg_over_time(weather_pv_potential_w[${Math.max(st,3900)}s])`,from,to,st)};   // always from the DB (recent + historical) -> matches the GTI chart
+      else { const series=await Promise.all(p.series.map(async s=>{ if(s.avail) return {...s,pts:await qRange(`avg_over_time(${POTW}[${Math.max(st,3900)}s])`,from,to,st)};   // always from the DB (recent + historical) -> matches the GTI chart
         const ag=s.agg||p.agg||AGG; const w2=s.wx?Math.max(st,3900):aw; return {...s,pts:await qRange(`${ag}_over_time((${s.expr})[${w2}s])`,from,to,st)}; })); c.chart.setData(series); }
     } else if(p.t==="info"){ try{ c.last=await (await fetch("/info")).json(); }catch(e){} renderInfo(c); }
     else if(p.t==="sky"){ renderSky(c); }
