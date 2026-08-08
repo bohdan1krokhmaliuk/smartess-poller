@@ -387,8 +387,8 @@ def _cams_fetch(lat, lon, tilt, az, begin, end):
     """CAMS all-sky GHI/DNI/DHI (hourly, W/m²) transposed to the array plane → [(epoch, poa_w_m2)]. Midpoint ts."""
     if not CAMS_EMAIL:
         return []
-    di = ("latitude=%s;longitude=%s;altitude=-999;date_begin=%s;date_end=%s;time_ref=UT;summarization=PT01H;username=%s"
-          % (lat, lon, begin, end, CAMS_EMAIL.replace("@", "%2540")))
+    di = ("latitude=%s;longitude=%s;altitude=-999;date_begin=%s;date_end=%s;time_ref=UT;summarization=PT15M;username=%s"
+          % (lat, lon, begin, end, CAMS_EMAIL.replace("@", "%2540")))   # 15-min = Meteosat's native cadence
     url = (CAMS_WPS + "?Service=WPS&Request=Execute&Identifier=get_cams_radiation&version=1.0.0"
            "&DataInputs=" + di + "&RawDataOutput=irradiation")
     try:
@@ -405,7 +405,7 @@ def _cams_fetch(lat, lon, tilt, az, begin, end):
         if len(p) < 10:
             continue
         try:
-            ep = calendar.timegm(time.strptime(p[0].split("/")[0][:19], "%Y-%m-%dT%H:%M:%S")) + 1800   # hour midpoint
+            ep = calendar.timegm(time.strptime(p[0].split("/")[0][:19], "%Y-%m-%dT%H:%M:%S")) + 450   # 15-min period midpoint
             ghi, dhi, bni = float(p[6]), float(p[8]), float(p[9])   # all-sky global / diffuse / beam-normal, W/m²
         except (ValueError, IndexError):
             continue
