@@ -29,6 +29,7 @@ Environment variables (SMARTESS_*) override both. No code editing required.
 import calendar
 import concurrent.futures
 import configparser
+import math
 import http.server
 import json
 import os
@@ -210,7 +211,7 @@ QFLAG_NAMES = {
 # Runs in its own thread — it never touches the RS485 bus, so it works in any mode.
 WEATHER_INTERVAL = 300     # seconds between weather writes (~5 min; GTI interpolated from the 15-min source)
 _WEATHER_URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
-                "&current=cloud_cover,temperature_2m"
+                "&current=cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,temperature_2m"
                 "&minutely_15=global_tilted_irradiance"
                 "&tilt=%d&azimuth=%d&forecast_days=1&timezone=GMT")
 
@@ -229,6 +230,48 @@ def pv_derate(gti, t_air):
         return PV_BASE_DERATE
     t_cell = t_air + (gti / 800.0) * (PV_NOCT - 20.0)
     return max(0.5, min(1.05, PV_BASE_DERATE * (1.0 - PV_TEMP_COEFF * (t_cell - 25.0))))
+
+
+# --- self-computed irradiance ("own" source): clear-sky geometry × cloud transmission ---
+# Free and computable every cycle from just cloud_cover + temperature — no external irradiance product.
+# The point: bypass Open-Meteo's interpolated GTI (which misses convective clouds for our region) and instead
+# build GTI ourselves from sun geometry, attenuated by cloud_cover via Kasten-Czeplak. Same math as the
+# dashboard's clear-sky fallback + cloudFactor.
+def _solar_elev_az(lat, lon, ts):
+    r = math.pi / 180.0
+    d = time.gmtime(ts)
+    N = d.tm_yday
+    dec = 23.45 * math.sin(r * 360 * (284 + N) / 365)
+    B = r * 360 * (N - 81) / 364
+    eot = 9.87 * math.sin(2 * B) - 7.53 * math.cos(B) - 1.5 * math.sin(B)
+    utc_h = d.tm_hour + d.tm_min / 60.0 + d.tm_sec / 3600.0
+    solar_t = utc_h + lon / 15.0 + eot / 60.0
+    H = 15.0 * (solar_t - 12.0)
+    sin_el = math.sin(lat * r) * math.sin(dec * r) + math.cos(lat * r) * math.cos(dec * r) * math.cos(H * r)
+    el = math.degrees(math.asin(max(-1.0, min(1.0, sin_el))))
+    az = (math.degrees(math.atan2(math.sin(H * r),
+          math.cos(H * r) * math.sin(lat * r) - math.tan(dec * r) * math.cos(lat * r))) + 540) % 360
+    return el, az
+
+
+def clearsky_gti(lat, lon, tilt, az, ts):
+    """Clear-sky plane-of-array irradiance (W/m²) from geometry — no clouds."""
+    el, saz = _solar_elev_az(lat, lon, ts)
+    if el <= 2:
+        return 0.0
+    r = math.pi / 180.0
+    am = 1.0 / math.sin(el * r)
+    dni = 1000.0 * (0.7 ** (am ** 0.678))
+    cos_aoi = math.sin(el * r) * math.cos(tilt * r) + math.cos(el * r) * math.sin(tilt * r) * math.cos((saz - az) * r)
+    return dni * max(0.0, cos_aoi) + 0.1 * dni * (1 + math.cos(tilt * r)) / 2.0
+
+
+def cloud_transmission(cloud):
+    """Kasten-Czeplak: fraction of clear-sky irradiance passing through cloud cover (%)."""
+    if cloud is None:
+        return 1.0
+    n = max(0.0, min(1.0, cloud / 100.0))
+    return 1.0 - 0.75 * (n ** 3.4)
 
 
 def _load_pv_geo():
@@ -345,6 +388,9 @@ def fetch_weather_once(mc, topic):
     out = {}
     if cur.get("cloud_cover") is not None:
         out["cloud"] = cur["cloud_cover"]
+    for lvl in ("low", "mid", "high"):                     # kept for tuning the cloud transmission later
+        if cur.get("cloud_cover_" + lvl) is not None:
+            out["cloud_" + lvl] = cur["cloud_cover_" + lvl]
     if cur.get("temperature_2m") is not None:
         out["temp"] = cur["temperature_2m"]
     m = j.get("minutely_15") or {}
@@ -373,6 +419,14 @@ def fetch_weather_once(mc, topic):
         out["gti"] = round(gti, 1)
         if kwp > 0:
             out["pv_potential_w"] = round(kwp * out["gti"] * pv_derate(out["gti"], out.get("temp")))
+    # "own" source: our clear-sky GTI × cloud transmission (free, every cycle) — bypasses Open-Meteo's irradiance.
+    if kwp > 0:
+        try:
+            own_gti = clearsky_gti(lat, lon, tilt, az, now) * cloud_transmission(out.get("cloud"))
+            out["own_gti"] = round(own_gti, 1)
+            out["own_w"] = round(kwp * own_gti * pv_derate(own_gti, out.get("temp")))
+        except Exception:
+            pass
     # Solcast is stored separately (full curve, real timestamps) by solcast_loop, not here.
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
