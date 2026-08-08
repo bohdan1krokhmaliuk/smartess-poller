@@ -375,6 +375,93 @@ def solcast_loop():
         time.sleep(300)
 
 
+# --- CAMS Radiation Service (Copernicus/SoDa): satellite GHI/DNI/DHI, free, 500/day, history from 2004 ---
+# ~1-day latency (all-sky needs satellite processing), so it's a satellite ground-truth for the past, not "now".
+# We transpose its horizontal components onto the array plane ourselves → "our own GTI from satellite data".
+# Email (the CAMS credential) comes from the environment, never git/settings.
+CAMS_EMAIL = os.environ.get("SMARTESS_CAMS_EMAIL", "").strip()
+CAMS_WPS = "https://api.soda-solardata.com/service/wps"
+CAMS_BF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cams_backfill")
+
+def _cams_fetch(lat, lon, tilt, az, begin, end):
+    """CAMS all-sky GHI/DNI/DHI (hourly, W/m²) transposed to the array plane → [(epoch, poa_w_m2)]. Midpoint ts."""
+    if not CAMS_EMAIL:
+        return []
+    di = ("latitude=%s;longitude=%s;altitude=-999;date_begin=%s;date_end=%s;time_ref=UT;summarization=PT01H;username=%s"
+          % (lat, lon, begin, end, CAMS_EMAIL.replace("@", "%2540")))
+    url = (CAMS_WPS + "?Service=WPS&Request=Execute&Identifier=get_cams_radiation&version=1.0.0"
+           "&DataInputs=" + di + "&RawDataOutput=irradiation")
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception:
+        return []
+    r = math.pi / 180.0
+    out = []
+    for ln in text.splitlines():
+        if not ln or ln.startswith("#"):
+            continue
+        p = ln.split(";")
+        if len(p) < 10:
+            continue
+        try:
+            ep = calendar.timegm(time.strptime(p[0].split("/")[0][:19], "%Y-%m-%dT%H:%M:%S")) + 1800   # hour midpoint
+            ghi, dhi, bni = float(p[6]), float(p[8]), float(p[9])   # all-sky global / diffuse / beam-normal, W/m²
+        except (ValueError, IndexError):
+            continue
+        el, saz = _solar_elev_az(lat, lon, ep)
+        if el <= 0:
+            poa = 0.0
+        else:   # isotropic transposition to tilt/azimuth (albedo 0.2)
+            cosaoi = math.sin(el * r) * math.cos(tilt * r) + math.cos(el * r) * math.sin(tilt * r) * math.cos((saz - az) * r)
+            poa = bni * max(0.0, cosaoi) + dhi * (1 + math.cos(tilt * r)) / 2 + 0.2 * ghi * (1 - math.cos(tilt * r)) / 2
+        out.append((ep, poa))
+    return out
+
+def _cams_write(lat, lon, tilt, az, kwp, begin, end):
+    pts = _cams_fetch(lat, lon, tilt, az, begin, end)
+    if not pts:
+        return 0
+    lines = "\n".join("cams w=%.0f,gti=%.0f %d" % (kwp * poa * pv_derate(poa, None), poa, ep) for (ep, poa) in pts)
+    try:
+        req = urllib.request.Request(_VM_WRITE, data=lines.encode("utf-8"), method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            r.read()
+        return len(pts)
+    except Exception:
+        return 0
+
+def cams_loop():
+    """Backfill ~60 days of satellite truth once, then refresh the last few days every 6h (data lags ~1 day)."""
+    if not CAMS_EMAIL:
+        return
+    geo = _load_pv_geo()
+    if not geo:
+        return
+    lat, lon, kwp, tilt, az = geo
+    if kwp <= 0:
+        return
+    try:
+        with open(CAMS_BF_FILE) as f:
+            bf_done = (time.time() - float(f.read().strip() or 0)) < 20 * 86400
+    except Exception:
+        bf_done = False
+    if not bf_done:
+        end = time.strftime("%Y-%m-%d", time.gmtime())
+        begin = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 60 * 86400))
+        if _cams_write(lat, lon, tilt, az, kwp, begin, end) > 0:
+            try:
+                with open(CAMS_BF_FILE, "w") as f:
+                    f.write(str(int(time.time())))
+            except Exception:
+                pass
+    while True:
+        end = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400))     # include today (server clamps to available)
+        begin = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 3 * 86400))
+        _cams_write(lat, lon, tilt, az, kwp, begin, end)
+        time.sleep(21600)   # 6h; CAMS updates ~daily, 500/day budget is ample
+
+
 def fetch_weather_once(mc, topic):
     """Pull current cloud/temp + 15-min tilted irradiance, publish weather_json."""
     geo = _load_pv_geo()
@@ -1619,6 +1706,7 @@ def main():
     _load_rated_state()          # so a restart alone doesn't re-log unchanged settings
     threading.Thread(target=weather_loop, args=(mc, topic), daemon=True).start()
     threading.Thread(target=solcast_loop, daemon=True).start()
+    threading.Thread(target=cams_loop, daemon=True).start()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

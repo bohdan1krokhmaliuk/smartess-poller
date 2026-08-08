@@ -216,11 +216,13 @@ const PV_HARVEST_ON=110, PV_HARVEST_SPAN=190;   // 0 below 110 W/m², linear ram
 //                  Adaptive smoothing. Only exists from when Solcast collection started (no historical predicted).
 //   2 own        — self-computed: our clear-sky GTI × cloud transmission from Open-Meteo cloud_cover
 //                  (weather_own_w), + the same low-sun rolloff. Free, every 5 min, full history.
-let PVMODE=Math.max(0,Math.min(2, +localStorage.getItem("pvmode")||0));
-const PVMODE_LABEL=["open-meteo","solcast","own"];
-function pvHarvest(irr){ return (PVMODE===1||irr==null)?1:Math.max(0,Math.min(1,(irr-PV_HARVEST_ON)/PV_HARVEST_SPAN)); }   // solcast already realistic → no rolloff; open-meteo & own get the low-sun rolloff
+//   3 cams       — CAMS satellite GHI/DNI/DHI (Copernicus) transposed to our plane (cams_w). Satellite truth,
+//                  but ~1-day latency → shows past days accurately, blank for today.
+let PVMODE=Math.max(0,Math.min(3, +localStorage.getItem("pvmode")||0));
+const PVMODE_LABEL=["open-meteo","solcast","own","cams"];
+function pvHarvest(irr){ return (PVMODE===1||irr==null)?1:Math.max(0,Math.min(1,(irr-PV_HARVEST_ON)/PV_HARVEST_SPAN)); }   // solcast is a PV estimate; the rest are irradiance → apply the low-sun rolloff
 const _roll=(x)=>`clamp_max(clamp_min((${x} - ${PV_HARVEST_ON})/${PV_HARVEST_SPAN}, 0), 1)`;
-function POTW(){ if(PVMODE===1)return `solcast_w`; if(PVMODE===2)return `(weather_own_w * ${_roll("weather_own_gti")})`; return `(weather_pv_potential_w * ${_roll("weather_gti")})`; }
+function POTW(){ if(PVMODE===1)return `solcast_w`; if(PVMODE===3)return `(cams_w * ${_roll("cams_gti")})`; if(PVMODE===2)return `(weather_own_w * ${_roll("weather_own_gti")})`; return `(weather_pv_potential_w * ${_roll("weather_gti")})`; }
 // clear-sky plane-of-array irradiance (W/m²) from pure geometry — no clouds. Used to compute the "own" source.
 function pvClearSkyIrr(d){ if(PVLAT==null||PVLON==null)return null; const {el,az}=solarElevAz(PVLAT,PVLON,d); if(el<=2)return 0;
   const r=Math.PI/180, AM=1/Math.sin(el*r), DNI=1000*Math.pow(0.7,Math.pow(AM,0.678));
@@ -665,7 +667,7 @@ for(const sec of SECTIONS){ const head=document.createElement("div");head.classN
     const title=document.createElement("h3");title.textContent=p.title; const dsc=p.desc||DESC[p.title]; if(dsc)title.dataset.tip=dsc; card.append(title);
     if(p.pvhead){ card.style.position="relative";   // dropdown: what the predicted line means
       const sel=document.createElement("select");
-      sel.title="Predicted-line source:\n• open-meteo — the weather-model forecast (its GTI) + low-sun correction. Free, full history — but for our region overshoots on cloudy days (its irradiance misses convective clouds).\n• solcast — satellite-derived PV estimate: sees the actual clouds, realistic on overcast days. Only from when Solcast collection began (no historical).\n• own — self-computed: our own clear-sky GTI (sun geometry) × cloud transmission from Open-Meteo cloud_cover. Free, every 5 min, full history. We control the cloud model, so it can beat Open-Meteo's GTI on cloudy days — but it still relies on the (imperfect) cloud forecast, so it's not as good as satellite.";
+      sel.title="Predicted-line source:\n• open-meteo — weather-model forecast (GTI) + low-sun correction. Free, full history; overshoots on cloudy days here.\n• solcast — satellite PV estimate, near-real-time, sees real clouds. From when collection began (no history), 10 calls/day.\n• own — self-computed clear-sky GTI × Open-Meteo cloud_cover. Free, 5-min, full history; better than open-meteo on clouds but still relies on the cloud forecast.\n• cams — CAMS satellite GHI/DNI/DHI (Copernicus) transposed to your array. Satellite ground-truth, ~1-day latency, so it shows past days accurately but is blank for today. Best for validating the others.";
       sel.style.cssText="position:absolute;top:8px;right:11px;font-size:.6rem;font-weight:600;padding:2px 6px;border-radius:8px;cursor:pointer;z-index:3;background:var(--card);color:var(--text);border:1px solid "+(PVMODE>0?"var(--accent)":"var(--grid)");
       PVMODE_LABEL.forEach((lb,i)=>{ const o=document.createElement("option"); o.value=String(i); o.textContent=lb; sel.append(o); });
       sel.value=String(PVMODE);
@@ -877,8 +879,8 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
   // and needs a wide window to bridge gaps. A 2-day cutoff wrongly smeared 5-min days from 3–5 days ago; density is
   // the right signal (it also handles a sparse day inside an otherwise dense range). ~3 samples per bucket, capped.
   let wxw=Math.max(st,3900);   // v1: fixed 65-min smoothing (as it was)
-  if(PVMODE>=1){ const dm=PVMODE===1?"solcast_w":"weather_cloud"; try{ const wxN=await qInstant(`count_over_time(${dm}[${win}s])`,evalT); const sp=(wxN&&wxN>0)?win/wxN:3600; wxw=Math.max(st,Math.min(3900,Math.round(sp*3))); }
-    catch(e){ wxw=Math.max(st,900); } }   // solcast/own: density-adaptive smoothing
+  if(PVMODE>=1){ const dm=PVMODE===1?"solcast_w":(PVMODE===2?"weather_cloud":"cams_w"); try{ const wxN=await qInstant(`count_over_time(${dm}[${win}s])`,evalT); const sp=(wxN&&wxN>0)?win/wxN:3600; wxw=Math.max(st,Math.min(3900,Math.round(sp*3))); }
+    catch(e){ wxw=Math.max(st,900); } }   // solcast/own/cams: density-adaptive smoothing
   { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
   await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
