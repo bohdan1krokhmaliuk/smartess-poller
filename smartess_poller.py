@@ -256,8 +256,11 @@ def _load_pv_geo():
 # a realistic predicted line on cloudy days, when Open-Meteo's interpolated GTI overshoots.
 SOLCAST_KEY = os.environ.get("SMARTESS_SOLCAST_KEY", "").strip()
 SOLCAST_RID = os.environ.get("SMARTESS_SOLCAST_RID", "").strip()
-SOLCAST_REFETCH = int(os.environ.get("SMARTESS_SOLCAST_REFETCH", "1800"))   # refetch cadence (s); data is 30-min
-_solcast = {"at": 0.0, "pts": []}   # cached curve: sorted [(epoch, pv_watts)]
+# Free rooftop tier is ~10 requests/day and 30-min resolution, so refetch every 3h (8/day) and use the FORECAST
+# endpoint (forward-looking): a 3h-old forecast still has valid current + near-future values to interpolate to now,
+# unlike estimated_actuals which would go stale. Forecast also carries the P10/P90 band.
+SOLCAST_REFETCH = int(os.environ.get("SMARTESS_SOLCAST_REFETCH", "10800"))   # 3h; free tier ~10 calls/day
+_solcast = {"at": 0.0, "pts": []}   # cached curve: sorted [(epoch, pv_w, p10_w, p90_w)]
 
 def _solcast_refetch():
     if not (SOLCAST_KEY and SOLCAST_RID):
@@ -265,18 +268,21 @@ def _solcast_refetch():
     now = time.time()
     if _solcast["pts"] and now - _solcast["at"] < SOLCAST_REFETCH:
         return
-    _solcast["at"] = now   # throttle even if this attempt fails, so we never hammer the API
+    _solcast["at"] = now   # throttle even if this attempt fails (incl. 429), so we never hammer the API
     try:
-        url = ("https://api.solcast.com.au/rooftop_sites/%s/estimated_actuals?format=json&hours=6"
+        url = ("https://api.solcast.com.au/rooftop_sites/%s/forecasts?format=json&hours=48"
                % SOLCAST_RID)
         req = urllib.request.Request(url, headers={"Authorization": "Bearer " + SOLCAST_KEY})
         with urllib.request.urlopen(req, timeout=20) as r:
             j = json.loads(r.read().decode("utf-8"))
         pts = []
-        for p in (j.get("estimated_actuals") or []):
+        for p in (j.get("forecasts") or []):
             try:
                 ep = calendar.timegm(time.strptime(p["period_end"][:19], "%Y-%m-%dT%H:%M:%S"))
-                pts.append((ep, float(p["pv_estimate"]) * 1000.0))   # kW -> W
+                pv = float(p["pv_estimate"]) * 1000.0                                 # kW -> W
+                lo = float(p.get("pv_estimate10", p["pv_estimate"])) * 1000.0          # P10 (cloudy-case low)
+                hi = float(p.get("pv_estimate90", p["pv_estimate"])) * 1000.0          # P90 (clear-case high)
+                pts.append((ep, pv, lo, hi))
             except (KeyError, ValueError, TypeError):
                 pass
         pts.sort()
@@ -285,8 +291,20 @@ def _solcast_refetch():
     except Exception:
         pass   # keep the previous cache on any failure (graceful degradation)
 
+def _interp(pts, now, col):
+    if now <= pts[0][0]:
+        return pts[0][col]
+    if now >= pts[-1][0]:
+        return pts[-1][col] if now - pts[-1][0] < 5400 else None   # don't carry a value >1.5h past the curve
+    for i in range(1, len(pts)):
+        if pts[i][0] >= now:
+            a0, a1 = pts[i - 1][col], pts[i][col]
+            f = (now - pts[i - 1][0]) / ((pts[i][0] - pts[i - 1][0]) or 1)
+            return a0 + (a1 - a0) * f
+    return pts[-1][col]
+
 def solcast_pv_now():
-    """Satellite PV estimate (W) interpolated to now, or None if unavailable/stale."""
+    """(pv, p10, p90) satellite PV estimate in W interpolated to now, or None."""
     if not (SOLCAST_KEY and SOLCAST_RID):
         return None
     _solcast_refetch()
@@ -294,16 +312,10 @@ def solcast_pv_now():
     if not pts:
         return None
     now = time.time()
-    if now <= pts[0][0]:
-        return round(pts[0][1])
-    if now >= pts[-1][0]:
-        return round(pts[-1][1]) if now - pts[-1][0] < 3600 else None   # don't carry a stale value past ~1h
-    for i in range(1, len(pts)):
-        if pts[i][0] >= now:
-            a0, a1 = pts[i - 1][1], pts[i][1]
-            f = (now - pts[i - 1][0]) / ((pts[i][0] - pts[i - 1][0]) or 1)
-            return round(a0 + (a1 - a0) * f)
-    return round(pts[-1][1])
+    pv = _interp(pts, now, 1)
+    if pv is None:
+        return None
+    return (round(pv), round(_interp(pts, now, 2)), round(_interp(pts, now, 3)))
 
 
 def fetch_weather_once(mc, topic):
@@ -349,7 +361,9 @@ def fetch_weather_once(mc, topic):
             out["pv_potential_w"] = round(kwp * out["gti"] * pv_derate(out["gti"], out.get("temp")))
     sc = solcast_pv_now()
     if sc is not None:
-        out["solcast_w"] = sc   # -> weather_solcast_w (satellite-derived realistic PV estimate)
+        out["solcast_w"] = sc[0]        # -> weather_solcast_w (satellite-derived realistic PV estimate)
+        out["solcast_lo_w"] = sc[1]     # -> weather_solcast_lo_w (P10, cloudy-case)
+        out["solcast_hi_w"] = sc[2]     # -> weather_solcast_hi_w (P90, clear-case)
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
     return out
