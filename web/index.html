@@ -214,24 +214,19 @@ const PV_HARVEST_ON=110, PV_HARVEST_SPAN=190;   // 0 below 110 W/m², linear ram
 //                  gentle 65-min smoothing. The weather-model forecast; overshoots on cloudy days for our region.
 //   1 solcast    — satellite-derived PV estimate (solcast_w); sees the real clouds, realistic on overcast.
 //                  Adaptive smoothing. Only exists from when Solcast collection started (no historical predicted).
-//   2 own        — self-computed: our clear-sky GTI × cloud transmission from Open-Meteo cloud_cover
-//                  (weather_own_w), + the same low-sun rolloff. Free, every 5 min, full history.
-//   3 cams       — CAMS satellite GHI/DNI/DHI (Copernicus) transposed to our plane (cams_w). Satellite truth,
+//   2 cams       — CAMS satellite GHI/DNI/DHI (Copernicus) transposed to our plane (cams_w). Satellite truth,
 //                  but ~1-day latency → shows past days accurately, blank for today.
-let PVMODE=Math.max(0,Math.min(3, +localStorage.getItem("pvmode")||0));
-const PVMODE_LABEL=["open-meteo","solcast","own","cams"];
+let PVMODE=Math.max(0,Math.min(2, +localStorage.getItem("pvmode")||0));   // legacy own(2)/cams(3) both clamp to cams(2)
+const PVMODE_LABEL=["open-meteo","solcast","cams"];
 function pvHarvest(irr){ return (PVMODE===1||irr==null)?1:Math.max(0,Math.min(1,(irr-PV_HARVEST_ON)/PV_HARVEST_SPAN)); }   // solcast is a PV estimate; the rest are irradiance → apply the low-sun rolloff
 const _roll=(x)=>`clamp_max(clamp_min((${x} - ${PV_HARVEST_ON})/${PV_HARVEST_SPAN}, 0), 1)`;
-function POTW(){ if(PVMODE===1)return `solcast_w`; if(PVMODE===3)return `(cams_w * ${_roll("cams_gti")})`; if(PVMODE===2)return `(weather_own_w * ${_roll("weather_own_gti")})`; return `(weather_pv_potential_w * ${_roll("weather_gti")})`; }
-// clear-sky plane-of-array irradiance (W/m²) from pure geometry — no clouds. Used to compute the "own" source.
+function POTW(){ if(PVMODE===1)return `solcast_w`; if(PVMODE===2)return `(cams_w * ${_roll("cams_gti")})`; return `(weather_pv_potential_w * ${_roll("weather_gti")})`; }
+// clear-sky plane-of-array irradiance (W/m²) from pure geometry — no clouds. Offline fallback for the open-meteo potential.
 function pvClearSkyIrr(d){ if(PVLAT==null||PVLON==null)return null; const {el,az}=solarElevAz(PVLAT,PVLON,d); if(el<=2)return 0;
   const r=Math.PI/180, AM=1/Math.sin(el*r), DNI=1000*Math.pow(0.7,Math.pow(AM,0.678));
   const tilt=(PVTILT==null?30:PVTILT), paz=(PVAZ==null?180:PVAZ);
   const cosAOI=Math.sin(el*r)*Math.cos(tilt*r)+Math.cos(el*r)*Math.sin(tilt*r)*Math.cos((az-paz)*r);
   return DNI*Math.max(0,cosAOI)+0.1*DNI*(1+Math.cos(tilt*r))/2; }
-// "own" PV potential (W) at time t from a cloud-cover %: clear-sky × cloud transmission × temp derate × harvest floor.
-function ownAt(ms,cloud){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null; const irr=pvClearSkyIrr(new Date(ms)); if(irr==null)return null;
-  const gti=irr*cloudFactor(cloud); return Math.round(PVKWP*gti*pvDerate(gti,tempAt(ms))*pvHarvest(gti)); }
 function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
   const g=gtiAt(d.getTime());
   if(g!=null) return Math.round(PVKWP*g*pvDerate(g,tempAt(d.getTime()))*pvHarvest(g));   // GTI (clouds modelled) × temp derate × harvest floor
@@ -879,26 +874,26 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
   // and needs a wide window to bridge gaps. A 2-day cutoff wrongly smeared 5-min days from 3–5 days ago; density is
   // the right signal (it also handles a sparse day inside an otherwise dense range). ~3 samples per bucket, capped.
   let wxw=Math.max(st,3900);   // v1: fixed 65-min smoothing (as it was)
-  if(PVMODE>=1){ const dm=PVMODE===1?"solcast_w":(PVMODE===2?"weather_cloud":"cams_w"); try{ const wxN=await qInstant(`count_over_time(${dm}[${win}s])`,evalT); const sp=(wxN&&wxN>0)?win/wxN:3600; wxw=Math.max(st,Math.min(3900,Math.round(sp*3))); }
-    catch(e){ wxw=Math.max(st,900); } }   // solcast/own/cams: density-adaptive smoothing
+  if(PVMODE>=1){ const dm=PVMODE===1?"solcast_w":"cams_w"; try{ const wxN=await qInstant(`count_over_time(${dm}[${win}s])`,evalT); const sp=(wxN&&wxN>0)?win/wxN:3600; wxw=Math.max(st,Math.min(3900,Math.round(sp*3))); }
+    catch(e){ wxw=Math.max(st,900); } }   // solcast/cams: density-adaptive smoothing
   { const lu=document.getElementById("lastUpd"); if(lu)lu.textContent="⟳ "+new Date().toLocaleTimeString(); }
   await Promise.all(cards.slice().sort((a,b)=>(a.p.t==="chart"?0:1)-(b.p.t==="chart"?0:1)).map(async c=>{ const p=c.p;   // fetch time charts first (they're what a zoom/pan changes) so they refill fastest
     if(p.t==="chart"){ c.chart.stepMs=st*1000;
       if(p.kind==="bars"){ const B=chooseBucket((to-from)/1000); c.chart.bucketMs=B*1000;
         const series=await Promise.all(p.series.map(async s=>{ const pw=s.power==="@pred"?POTW():s.power; const base=s.counter?`max_over_time(${s.counter}[${B}s]) - min_over_time(${s.counter}[${B}s])`+(pw?` or (sum_over_time((${pw})[${B}s:300s]) * 300/3600000)`:``):`sum_over_time((${pw})[${B}s:300s]) * 300/3600000`; const q=s.cost?`(${base})*${TARIFF}`:base; return {...s, pts:(await qRange(q, from, to, B)).map(pt=>[pt[0]-B*500, pt[1]])}; })); c.chart.setData(series); }
       else if(p.pvhead){ const conf=pvPotentialW()!=null, ww=wxw;   // available always from the DB (same source/window as the GTI chart) so the two can't diverge
-        const availQ = PVMODE===2 ? `avg_over_time(weather_cloud[${ww}s])` : `avg_over_time(${POTW()}[${ww}s])`;   // own: fetch cloud, compute predicted client-side (full history from weather_cloud)
+        const availQ = `avg_over_time(${POTW()}[${ww}s])`;
         const [pv,availRaw,ld]=await Promise.all([
           qRange(`${AGG}_over_time((${M.pvpow})[${aw}s])`,from,to,st),
           qRange(availQ,from,to,st),
           qRange(`${AGG}_over_time((inverter_ac_output_active_power)[${aw}s])`,from,to,st) ]);   // house load
-        const availVM = PVMODE===2 ? (availRaw||[]).map(([t,c])=>[t,ownAt(t,c)]).filter(p=>p[1]!=null) : availRaw;   // own = clear-sky × cloud transmission, per point
+        const availVM = availRaw;
         const availM=new Map((availVM||[]).map(p=>[p[0],p[1]])), ldM=new Map((ld||[]).map(p=>[p[0],p[1]])), ldA=ld||[];
         const loadAt=(t)=>{ const e=ldM.get(t); if(e!=null)return e;   // raw load where present; ONLY if a bucket is missing, use the mean of the two nearest samples (no smoothing of real values)
           let lo=0,hi=ldA.length-1,bi=-1; while(lo<=hi){const m=(lo+hi)>>1; if(ldA[m][0]<=t){bi=m;lo=m+1;}else hi=m-1;}
           const b=bi>=0?ldA[bi]:null, u=bi+1<ldA.length?ldA[bi+1]:null; return b&&u?(b[1]+u[1])/2:(b||u||[0,0])[1]; };
         const avail=[], under=[], over=[];
-        for(const [t,v] of pv){ let a=availM.has(t)?availM.get(t):((conf&&PVMODE===0)?pvPotentialAt(new Date(t)):null);   // DB potential; client model fills gaps for open-meteo only — solcast/own show a real gap where they have no data
+        for(const [t,v] of pv){ let a=availM.has(t)?availM.get(t):((conf&&PVMODE===0)?pvPotentialAt(new Date(t)):null);   // DB potential; client model fills gaps for open-meteo only — solcast/cams show a real gap where they have no data
           if(a==null) continue; avail.push([t,a]);
           const l=loadAt(t), thr=l<500?250:100, ceil=Math.min(a,l);   // raw load (interpolated only when a bucket is missing)
           const isU=v>a, isO=v<a && (l-v)>thr;   // GREEN: produced beat the forecast -> always real (making more than predicted can't be curtailment). RED: below forecast AND load outran output (proves not throttled)

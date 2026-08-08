@@ -254,26 +254,6 @@ def _solar_elev_az(lat, lon, ts):
     return el, az
 
 
-def clearsky_gti(lat, lon, tilt, az, ts):
-    """Clear-sky plane-of-array irradiance (W/m²) from geometry — no clouds."""
-    el, saz = _solar_elev_az(lat, lon, ts)
-    if el <= 2:
-        return 0.0
-    r = math.pi / 180.0
-    am = 1.0 / math.sin(el * r)
-    dni = 1000.0 * (0.7 ** (am ** 0.678))
-    cos_aoi = math.sin(el * r) * math.cos(tilt * r) + math.cos(el * r) * math.sin(tilt * r) * math.cos((saz - az) * r)
-    return dni * max(0.0, cos_aoi) + 0.1 * dni * (1 + math.cos(tilt * r)) / 2.0
-
-
-def cloud_transmission(cloud):
-    """Kasten-Czeplak: fraction of clear-sky irradiance passing through cloud cover (%)."""
-    if cloud is None:
-        return 1.0
-    n = max(0.0, min(1.0, cloud / 100.0))
-    return 1.0 - 0.75 * (n ** 3.4)
-
-
 def _load_pv_geo():
     """PV location/geometry from the dashboard settings file: (lat, lon, kWp, tilt, az)."""
     try:
@@ -526,14 +506,6 @@ def fetch_weather_once(mc, topic):
         out["gti"] = round(gti, 1)
         if kwp > 0:
             out["pv_potential_w"] = round(kwp * out["gti"] * pv_derate(out["gti"], out.get("temp")))
-    # "own" source: our clear-sky GTI × cloud transmission (free, every cycle) — bypasses Open-Meteo's irradiance.
-    if kwp > 0:
-        try:
-            own_gti = clearsky_gti(lat, lon, tilt, az, now) * cloud_transmission(out.get("cloud"))
-            out["own_gti"] = round(own_gti, 1)
-            out["own_w"] = round(kwp * own_gti * pv_derate(own_gti, out.get("temp")))
-        except Exception:
-            pass
     # Solcast is stored separately (full curve, real timestamps) by solcast_loop, not here.
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
