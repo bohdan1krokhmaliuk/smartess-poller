@@ -886,7 +886,7 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
           let lo=0,hi=ldA.length-1,bi=-1; while(lo<=hi){const m=(lo+hi)>>1; if(ldA[m][0]<=t){bi=m;lo=m+1;}else hi=m-1;}
           const b=bi>=0?ldA[bi]:null, u=bi+1<ldA.length?ldA[bi+1]:null; return b&&u?(b[1]+u[1])/2:(b||u||[0,0])[1]; };
         const avail=[], under=[], over=[];
-        for(const [t,v] of pv){ let a=availM.has(t)?availM.get(t):(conf?pvPotentialAt(new Date(t)):null);   // DB potential; client model only fills the last point if the DB hasn't written it yet
+        for(const [t,v] of pv){ let a=availM.has(t)?availM.get(t):((conf&&PVMODE!==1)?pvPotentialAt(new Date(t)):null);   // DB potential; client model fills gaps for open-meteo only — solcast shows a real gap where it has no data (no Open-Meteo fallback)
           if(a==null) continue; avail.push([t,a]);
           const l=loadAt(t), thr=l<500?250:100, ceil=Math.min(a,l);   // raw load (interpolated only when a bucket is missing)
           const isU=v>a, isO=v<a && (l-v)>thr;   // GREEN: produced beat the forecast -> always real (making more than predicted can't be curtailment). RED: below forecast AND load outran output (proves not throttled)
