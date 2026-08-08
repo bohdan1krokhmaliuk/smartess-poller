@@ -307,7 +307,8 @@ SOLCAST_BF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sol
 # We write the WHOLE Solcast curve (not just "now") straight into VictoriaMetrics with real timestamps, so we
 # capture history (backfill), the forward forecast and the P10/P90 band from each call. Metric name solcast_w
 # (measurement "solcast", field "w") — a fresh series, independent of the brief weather_solcast_w Telegraf run.
-_VM_WRITE = os.environ.get("SMARTESS_VM_URL", "http://127.0.0.1:8428").rstrip("/") + "/write?precision=s"
+_VM_BASE = os.environ.get("SMARTESS_VM_URL", "http://127.0.0.1:8428").rstrip("/")
+_VM_WRITE = _VM_BASE + "/write?precision=s"
 
 def _solcast_fetch(kind, hours):
     """Fetch a rooftop curve → [(epoch, pv_w, p10_w, p90_w)]; [] on any error/rate-limit. Timestamp = period midpoint."""
@@ -382,6 +383,16 @@ def solcast_loop():
 CAMS_EMAIL = os.environ.get("SMARTESS_CAMS_EMAIL", "").strip()
 CAMS_WPS = "https://api.soda-solardata.com/service/wps"
 CAMS_BF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cams_backfill")
+CAMS_VER = "v2-15min-wm2"   # bump on any units/cadence change to force a clean re-backfill
+
+def _cams_delete():
+    """Drop the cams series so a re-backfill rewrites it cleanly (units/cadence migration)."""
+    for m in ("cams_w", "cams_gti"):
+        try:
+            u = _VM_BASE + "/api/v1/admin/tsdb/delete_series?match%5B%5D=" + urllib.parse.quote('{__name__="%s"}' % m)
+            urllib.request.urlopen(urllib.request.Request(u, method="POST"), timeout=20).read()
+        except Exception:
+            pass
 
 def _cams_fetch(lat, lon, tilt, az, begin, end):
     """CAMS all-sky GHI/DNI/DHI (hourly, W/m²) transposed to the array plane → [(epoch, poa_w_m2)]. Midpoint ts."""
@@ -405,8 +416,12 @@ def _cams_fetch(lat, lon, tilt, az, begin, end):
         if len(p) < 10:
             continue
         try:
-            ep = calendar.timegm(time.strptime(p[0].split("/")[0][:19], "%Y-%m-%dT%H:%M:%S")) + 450   # 15-min period midpoint
-            ghi, dhi, bni = float(p[6]), float(p[8]), float(p[9])   # all-sky global / diffuse / beam-normal, W/m²
+            per = p[0].split("/")
+            s_ep = calendar.timegm(time.strptime(per[0][:19], "%Y-%m-%dT%H:%M:%S"))
+            e_ep = calendar.timegm(time.strptime(per[1][:19], "%Y-%m-%dT%H:%M:%S"))
+            dur_h = (e_ep - s_ep) / 3600.0 or 1.0   # period length in hours (0.25 for PT15M, 1 for PT01H)
+            ep = (s_ep + e_ep) // 2   # period midpoint
+            ghi, dhi, bni = float(p[6]) / dur_h, float(p[8]) / dur_h, float(p[9]) / dur_h   # Wh/m² over period -> mean W/m²
         except (ValueError, IndexError):
             continue
         el, saz = _solar_elev_az(lat, lon, ep)
@@ -443,16 +458,21 @@ def cams_loop():
         return
     try:
         with open(CAMS_BF_FILE) as f:
-            bf_done = (time.time() - float(f.read().strip() or 0)) < 20 * 86400
+            parts = f.read().strip().split()
+        bf_ver = parts[0] if parts else ""
+        bf_ts = float(parts[1]) if len(parts) > 1 else 0.0
+        bf_done = bf_ver == CAMS_VER and (time.time() - bf_ts) < 20 * 86400
     except Exception:
-        bf_done = False
+        bf_ver, bf_done = "", False
     if not bf_done:
+        if bf_ver != CAMS_VER:
+            _cams_delete()   # schema/units changed -> wipe stale points before rewriting clean
         end = time.strftime("%Y-%m-%d", time.gmtime())
         begin = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 60 * 86400))
         if _cams_write(lat, lon, tilt, az, kwp, begin, end) > 0:
             try:
                 with open(CAMS_BF_FILE, "w") as f:
-                    f.write(str(int(time.time())))
+                    f.write("%s %d" % (CAMS_VER, int(time.time())))
             except Exception:
                 pass
     while True:
