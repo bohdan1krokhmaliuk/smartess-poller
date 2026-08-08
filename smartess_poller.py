@@ -260,62 +260,76 @@ SOLCAST_RID = os.environ.get("SMARTESS_SOLCAST_RID", "").strip()
 # endpoint (forward-looking): a 3h-old forecast still has valid current + near-future values to interpolate to now,
 # unlike estimated_actuals which would go stale. Forecast also carries the P10/P90 band.
 SOLCAST_REFETCH = int(os.environ.get("SMARTESS_SOLCAST_REFETCH", "10800"))   # 3h; free tier ~10 calls/day
-_solcast = {"at": 0.0, "pts": []}   # cached curve: sorted [(epoch, pv_w, p10_w, p90_w)]
+SOLCAST_BF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".solcast_backfill")
+# We write the WHOLE Solcast curve (not just "now") straight into VictoriaMetrics with real timestamps, so we
+# capture history (backfill), the forward forecast and the P10/P90 band from each call. Metric name solcast_w
+# (measurement "solcast", field "w") — a fresh series, independent of the brief weather_solcast_w Telegraf run.
+_VM_WRITE = os.environ.get("SMARTESS_VM_URL", "http://127.0.0.1:8428").rstrip("/") + "/write?precision=s"
 
-def _solcast_refetch():
+def _solcast_fetch(kind, hours):
+    """Fetch a rooftop curve → [(epoch, pv_w, p10_w, p90_w)]; [] on any error/rate-limit. Timestamp = period midpoint."""
     if not (SOLCAST_KEY and SOLCAST_RID):
-        return
-    now = time.time()
-    if _solcast["pts"] and now - _solcast["at"] < SOLCAST_REFETCH:
-        return
-    _solcast["at"] = now   # throttle even if this attempt fails (incl. 429), so we never hammer the API
+        return []
     try:
-        url = ("https://api.solcast.com.au/rooftop_sites/%s/forecasts?format=json&hours=48"
-               % SOLCAST_RID)
+        url = ("https://api.solcast.com.au/rooftop_sites/%s/%s?format=json&hours=%d"
+               % (SOLCAST_RID, kind, hours))
         req = urllib.request.Request(url, headers={"Authorization": "Bearer " + SOLCAST_KEY})
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=25) as r:
             j = json.loads(r.read().decode("utf-8"))
         pts = []
-        for p in (j.get("forecasts") or []):
+        for p in (j.get(kind) or []):
             try:
-                ep = calendar.timegm(time.strptime(p["period_end"][:19], "%Y-%m-%dT%H:%M:%S"))
+                ep = calendar.timegm(time.strptime(p["period_end"][:19], "%Y-%m-%dT%H:%M:%S")) - 900   # label at 30-min midpoint
                 pv = float(p["pv_estimate"]) * 1000.0                                 # kW -> W
-                lo = float(p.get("pv_estimate10", p["pv_estimate"])) * 1000.0          # P10 (cloudy-case low)
+                lo = float(p.get("pv_estimate10", p["pv_estimate"])) * 1000.0          # P10 (cloudy-case low; = pv for actuals)
                 hi = float(p.get("pv_estimate90", p["pv_estimate"])) * 1000.0          # P90 (clear-case high)
                 pts.append((ep, pv, lo, hi))
             except (KeyError, ValueError, TypeError):
                 pass
-        pts.sort()
-        if pts:
-            _solcast["pts"] = pts
+        return pts
     except Exception:
-        pass   # keep the previous cache on any failure (graceful degradation)
+        return []
 
-def _interp(pts, now, col):
-    if now <= pts[0][0]:
-        return pts[0][col]
-    if now >= pts[-1][0]:
-        return pts[-1][col] if now - pts[-1][0] < 5400 else None   # don't carry a value >1.5h past the curve
-    for i in range(1, len(pts)):
-        if pts[i][0] >= now:
-            a0, a1 = pts[i - 1][col], pts[i][col]
-            f = (now - pts[i - 1][0]) / ((pts[i][0] - pts[i - 1][0]) or 1)
-            return a0 + (a1 - a0) * f
-    return pts[-1][col]
-
-def solcast_pv_now():
-    """(pv, p10, p90) satellite PV estimate in W interpolated to now, or None."""
-    if not (SOLCAST_KEY and SOLCAST_RID):
-        return None
-    _solcast_refetch()
-    pts = _solcast["pts"]
+def _solcast_write(pts):
+    """Write the whole curve to VM via influx line protocol → solcast_w / solcast_lo_w / solcast_hi_w."""
     if not pts:
-        return None
-    now = time.time()
-    pv = _interp(pts, now, 1)
-    if pv is None:
-        return None
-    return (round(pv), round(_interp(pts, now, 2)), round(_interp(pts, now, 3)))
+        return
+    lines = "\n".join("solcast w=%.0f,lo_w=%.0f,hi_w=%.0f %d" % (pv, lo, hi, ep) for (ep, pv, lo, hi) in pts)
+    try:
+        req = urllib.request.Request(_VM_WRITE, data=lines.encode("utf-8"), method="POST")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            r.read()
+    except Exception:
+        pass
+
+def solcast_loop():
+    """Store the full Solcast curve in VM: forward forecast every 3h, plus a once-a-day backfill of the past
+    week from estimated_actuals. ~9 calls/day — within the free tier. Curves are idempotent (VM dedups by
+    timestamp), so re-writes just refine future points and re-fill observed ones."""
+    if not (SOLCAST_KEY and SOLCAST_RID):
+        return
+    try:
+        with open(SOLCAST_BF_FILE) as f:
+            bf_at = float(f.read().strip() or 0)
+    except Exception:
+        bf_at = 0.0
+    fc_at = 0.0
+    while True:
+        now = time.time()
+        if now - bf_at > 72000:                                   # ~20h: backfill the observed past week (1 call)
+            pts = _solcast_fetch("estimated_actuals", 168)
+            bf_at = now                                            # throttle the attempt (success or fail) — no hammering
+            if pts:
+                _solcast_write(pts)
+                try:
+                    with open(SOLCAST_BF_FILE, "w") as f:
+                        f.write(str(int(now)))                     # persist so restarts don't re-backfill
+                except Exception:
+                    pass
+        if now - fc_at > SOLCAST_REFETCH:                          # forward forecast + P10/P90 (1 call / 3h)
+            _solcast_write(_solcast_fetch("forecasts", 72))
+            fc_at = now
+        time.sleep(300)
 
 
 def fetch_weather_once(mc, topic):
@@ -359,11 +373,7 @@ def fetch_weather_once(mc, topic):
         out["gti"] = round(gti, 1)
         if kwp > 0:
             out["pv_potential_w"] = round(kwp * out["gti"] * pv_derate(out["gti"], out.get("temp")))
-    sc = solcast_pv_now()
-    if sc is not None:
-        out["solcast_w"] = sc[0]        # -> weather_solcast_w (satellite-derived realistic PV estimate)
-        out["solcast_lo_w"] = sc[1]     # -> weather_solcast_lo_w (P10, cloudy-case)
-        out["solcast_hi_w"] = sc[2]     # -> weather_solcast_hi_w (P90, clear-case)
+    # Solcast is stored separately (full curve, real timestamps) by solcast_loop, not here.
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
     return out
@@ -1554,6 +1564,7 @@ def main():
 
     _load_rated_state()          # so a restart alone doesn't re-log unchanged settings
     threading.Thread(target=weather_loop, args=(mc, topic), daemon=True).start()
+    threading.Thread(target=solcast_loop, daemon=True).start()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
