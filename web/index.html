@@ -210,17 +210,16 @@ function pvDerate(gti,tAir){ if(tAir==null)return PV_BASE_DERATE;
 // samples in 30 days), so the rolloff only ever touches the genuine low-sun tails, not cloudy middays.
 const PV_HARVEST_ON=110, PV_HARVEST_SPAN=190;   // 0 below 110 W/m², linear ramp, full at 300
 // Predicted-line SOURCE, switched by the dropdown on the "Produced vs predicted" chart:
-//   0 open-meteo — Open-Meteo GTI potential with the low-sun harvest rolloff (potential × harvest(gti)),
-//                  gentle 65-min smoothing. The weather-model forecast; overshoots on cloudy days for our region.
+//   0 open-meteo — RAW Open-Meteo GTI potential (weather_pv_potential_w = kWp × GTI × temp-derate); the
+//                  theoretical ceiling, NO harvest rolloff. Gentle 65-min smoothing. Overshoots on cloudy days.
 //   1 solcast    — satellite-derived PV estimate (solcast_w); sees the real clouds, realistic on overcast.
 //                  Adaptive smoothing. Only exists from when Solcast collection started (no historical predicted).
 //   2 cams       — CAMS satellite GHI/DNI/DHI (Copernicus) transposed to our plane (cams_w). Satellite truth,
 //                  but ~1-day latency → shows past days accurately, blank for today.
 let PVMODE=Math.max(0,Math.min(2, +localStorage.getItem("pvmode")||0));   // legacy own(2)/cams(3) both clamp to cams(2)
 const PVMODE_LABEL=["open-meteo","solcast","cams"];
-function pvHarvest(irr){ return (PVMODE===1||irr==null)?1:Math.max(0,Math.min(1,(irr-PV_HARVEST_ON)/PV_HARVEST_SPAN)); }   // solcast is a PV estimate; the rest are irradiance → apply the low-sun rolloff
-const _roll=(x)=>`clamp_max(clamp_min((${x} - ${PV_HARVEST_ON})/${PV_HARVEST_SPAN}, 0), 1)`;
-function POTW(){ if(PVMODE===1)return `solcast_w`; if(PVMODE===2)return `(cams_w * ${_roll("cams_gti")})`; return `(weather_pv_potential_w * ${_roll("weather_gti")})`; }
+const _roll=(x)=>`clamp_max(clamp_min((${x} - ${PV_HARVEST_ON})/${PV_HARVEST_SPAN}, 0), 1)`;   // low-sun harvest rolloff — now only on the cams satellite line; open-meteo is the raw ceiling
+function POTW(){ if(PVMODE===1)return `solcast_w`; if(PVMODE===2)return `(cams_w * ${_roll("cams_gti")})`; return `weather_pv_potential_w`; }
 // clear-sky plane-of-array irradiance (W/m²) from pure geometry — no clouds. Offline fallback for the open-meteo potential.
 function pvClearSkyIrr(d){ if(PVLAT==null||PVLON==null)return null; const {el,az}=solarElevAz(PVLAT,PVLON,d); if(el<=2)return 0;
   const r=Math.PI/180, AM=1/Math.sin(el*r), DNI=1000*Math.pow(0.7,Math.pow(AM,0.678));
@@ -229,9 +228,9 @@ function pvClearSkyIrr(d){ if(PVLAT==null||PVLON==null)return null; const {el,az
   return DNI*Math.max(0,cosAOI)+0.1*DNI*(1+Math.cos(tilt*r))/2; }
 function pvPotentialAt(d){ if(PVLAT==null||PVLON==null||!(PVKWP>0))return null;
   const g=gtiAt(d.getTime());
-  if(g!=null) return Math.round(PVKWP*g*pvDerate(g,tempAt(d.getTime()))*pvHarvest(g));   // GTI (clouds modelled) × temp derate × harvest floor
+  if(g!=null) return Math.round(PVKWP*g*pvDerate(g,tempAt(d.getTime())));   // raw ceiling: GTI (clouds modelled) × temp derate, no harvest rolloff
   const irr=pvClearSkyIrr(d); if(irr==null)return null;   // offline fallback: clear-sky geometry × cloud factor
-  return Math.round(PVKWP*irr*1.03*cloudFactor(cloudAt(d.getTime()))*pvHarvest(irr)); }
+  return Math.round(PVKWP*irr*1.03*cloudFactor(cloudAt(d.getTime()))); }
 function pvPotentialW(){ return pvPotentialAt(new Date()); }
 
 // settings shared across clients via the poller's /settings (localStorage is the local cache)
