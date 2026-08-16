@@ -991,8 +991,13 @@ def publish_qpiws(mc, topic, text):
             try:
                 with open(WARN_HISTORY_FILE, "a") as f:
                     f.write(json.dumps(event) + "\n")
-            except Exception as e:
-                print(time.strftime("%H:%M:%S"), "warning history write failed:", e)
+            except Exception:
+                try:                            # file may have gone read-only (mode 444) — restore write and retry once
+                    os.chmod(WARN_HISTORY_FILE, 0o644)
+                    with open(WARN_HISTORY_FILE, "a") as f:
+                        f.write(json.dumps(event) + "\n")
+                except Exception as e:
+                    print(time.strftime("%H:%M:%S"), "warning history write failed:", e)
 
 
 def publish_qet(mc, topic, text):
@@ -1543,11 +1548,19 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 return
 
             if path == "/warnings/history":            # warning/fault change-log (JSONL -> array)
+                events = []
                 try:
                     with open(WARN_HISTORY_FILE) as f:
-                        events = [json.loads(ln) for ln in f if ln.strip()]
+                        for ln in f:
+                            ln = ln.strip()
+                            if not ln:
+                                continue
+                            try:
+                                events.append(json.loads(ln))
+                            except Exception:
+                                pass                   # skip a corrupt/partial line, don't drop the whole log
                 except Exception:
-                    events = []
+                    pass
                 seen = {e.get("ts") for e in events}   # merge the in-memory buffer so history survives a wiped/unwritable file
                 events += [e for e in _warn_events if e.get("ts") not in seen]
                 events.sort(key=lambda e: e.get("ts", 0))
