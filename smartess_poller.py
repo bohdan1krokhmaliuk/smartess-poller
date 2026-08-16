@@ -963,6 +963,7 @@ def publish_qpiri(mc, topic, text):
 
 
 _warn_last = [None]   # last active name-set; None until the first reading (avoids logging startup all-clear)
+_warn_events = []     # in-memory copy of recent change events — survives a wiped/unwritable log file (within a session)
 
 
 def publish_qpiws(mc, topic, text):
@@ -985,6 +986,8 @@ def publish_qpiws(mc, topic, text):
             event = {"ts": int(time.time()),
                      "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                      "active": active, "level": level, "raw": text}
+            _warn_events.append(event)          # keep in memory even if the file write below fails
+            del _warn_events[:-500]
             try:
                 with open(WARN_HISTORY_FILE, "a") as f:
                     f.write(json.dumps(event) + "\n")
@@ -1542,10 +1545,13 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
             if path == "/warnings/history":            # warning/fault change-log (JSONL -> array)
                 try:
                     with open(WARN_HISTORY_FILE) as f:
-                        events = [json.loads(ln) for ln in f if ln.strip()][-5000:]
+                        events = [json.loads(ln) for ln in f if ln.strip()]
                 except Exception:
                     events = []
-                self._reply(200, "application/json", json.dumps(events))
+                seen = {e.get("ts") for e in events}   # merge the in-memory buffer so history survives a wiped/unwritable file
+                events += [e for e in _warn_events if e.get("ts") not in seen]
+                events.sort(key=lambda e: e.get("ts", 0))
+                self._reply(200, "application/json", json.dumps(events[-5000:]))
                 return
 
             if path.startswith("/query/"):             # read-only PI30 probe: send a Q… query, return raw reply

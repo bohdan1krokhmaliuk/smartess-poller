@@ -15,6 +15,9 @@ captures/
 .energy_state.json.tmp
 .rated_state.json
 .rated_history.jsonl
+.warnings_history.jsonl
+.cams_backfill
+.solcast_backfill
 
 # python
 __pycache__/
