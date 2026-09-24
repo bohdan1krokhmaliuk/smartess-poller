@@ -27,7 +27,6 @@ Environment variables (SMARTESS_*) override both. No code editing required.
 """
 
 import calendar
-import collections
 import concurrent.futures
 import configparser
 import math
@@ -502,9 +501,6 @@ def fetch_weather_once(mc, topic):
         out["gti"] = round(gti, 1)
         if kwp > 0:
             out["pv_potential_w"] = round(kwp * out["gti"] * pv_derate(out["gti"], out.get("temp")))
-    if kwp > 0 and epochs:                   # today's forecast PV curve, for the day/night mode switch
-        WX.update(ts=now, pot=[(e, kwp * g * pv_derate(g, out.get("temp")))
-                               for e, g in zip(epochs, gtis) if g is not None])
     # Solcast is stored separately (full curve, real timestamps) by solcast_loop, not here.
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
@@ -711,26 +707,25 @@ def catalog_json():
 
 # ------------------------------------------------------------------ operating modes
 # A mode is a STATIC set of the settings above: while it's selected, those values hold.
-# 🤖 Авто is the only one with logic: it holds ☀ Сонце while there's sun and 🌙 Ніч when
-# there isn't, and by day it moves to Ніч early when that's what it takes to reach the
-# evening with the battery ~80% full from the sun (auto_decide). mode_loop() applies the
+# 🤖 Авто is the only one with logic: 🌙 Ніч when there's no sun, and by day ☀ Сонце while
+# the battery is above a band (auto_decide). No forecast, and no passing cloud can switch
+# anything: sun / no sun flips once each way per day (sun_update). mode_loop() applies the
 # chosen set: only the fields that differ, only while the inverter is reachable (LOCAL,
 # fresh data), all queued in one go with an "n of m" progress count. Editing a mode field
 # by hand switches to ✋ Custom; the choice survives restarts.
 MODE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mode_state.json")
 MODE_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mode_log.jsonl")
 MODE_CFG = {
-    "battery_kwh": 8.75,      # usable capacity (Felicity 51.2 V × 171 Ah)
-    "evening_target": 80,     # 🤖 reach dusk with at least this SoC, from the sun...
-    "day_floor": 50,          # 🤖 ...and never go below this by day
-    "hyst_down": 2,           # 🤖 Сонце -> Ніч once SoC is this far below the threshold
-    "hyst_up": 3,             # 🤖 Ніч -> Сонце once it's this far above it
-    "dwell_s": 1200,          # 🤖 hold Сонце / Ніч at least 20 min before switching again
-    "load_w": 450,            # 🤖 load assumed for the rest of the day until measured
-    "pv_factor": 0.8,         # 🤖 trust in the forecast until today's actual/forecast ratio is known
+    "band_low": 70,           # 🤖 by day the battery carries the flat while SoC ≥ this...
+    "band_high": 80,          # 🤖 ...below it the grid does, until the sun has recharged it to this
+    "dwell_s": 1800,          # 🤖 at least 30 min between Сонце ⇄ Ніч switches
+    "pv_on_w": 300,           # sun: morning turns to day once the panels give this...
+    "sun_on_s": 900,          # ...for 15 min straight (or the sun is dawn_elev° up)
+    "dawn_elev": 15,
+    "pv_off_w": 150,          # evening turns to night once they give less than this...
+    "sun_off_s": 1200,        # ...for 20 min straight while the sun is below dusk_elev° (or it has set)
+    "dusk_elev": 10,
     "blackout_charge_a": 40,  # 🛡 grid charge current (~2 kW)
-    "dawn_w": 300,            # sun: day once the forecast (or actual) PV reaches this...
-    "dusk_kwh": 0.3,          # ...night once the forecast PV energy left today drops to this
     "min_gap_s": 300,         # the controller rewrites a field at most this often...
     "daily_cap": 48,          # ...and makes at most this many writes a day (EEPROM guard)
 }
@@ -740,9 +735,10 @@ CHG_SNU, CHG_OSO = 2, 3
 KEY_LABELS = {_OUT: "пріоритет виходу", _CHG: "пріоритет заряду", _ACA: "струм заряду з мережі"}
 MODES = {
     "auto":     {"name": "🤖 Авто", "keys": (_OUT, _CHG), "set": None,
-                 "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за тим, чи є сонце. Вдень — сонце й батарея, але "
-                         "так, щоб під вечір батарея була ~80% від сонця: коли решти сонця вже ледь вистачає, "
-                         "переходить на Ніч і дає сонцю дозарядити батарею. Без сонця — мережа."},
+                 "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за сонцем: зранку — коли панелі стабільно дають "
+                         "енергію, увечері — коли сонце низько й панелі згасли (раз на добу, хмарки нічого не "
+                         "перемикають). Вдень батарея живить квартиру, поки заряд ≥ 70%; нижче — мережа, а "
+                         "сонце дозаряджає до 80%, і знову батарея."},
     "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG), "set": {_OUT: OUT_SBU, _CHG: CHG_OSO},
                  "desc": "SBU: сонце — в квартиру, нестача — з батареї, мережа лише коли батарея сіла. "
                          "Батарею заряджає тільки сонце."},
@@ -757,12 +753,10 @@ MODES = {
                  "desc": "Pi нічого не змінює — керуєш сам (сторінка налаштувань, екран інвертора, SmartESS)."},
 }
 LIVE = {}                  # latest QPIGS numbers: ts, soc, pv_w, load_w
-WX = {}                    # today's forecast PV potential: ts, pot=[(epoch, W)]
 MS = {}                    # persisted mode state, see _mode_load()
 _mode_lock = threading.Lock()
 _mode_wake = threading.Event()
 _mode_events = []          # in-memory tail of the mode log
-_hist = collections.deque(maxlen=400)   # one (ts, soc, pv_w, load_w, forecast_w) sample per controller tick
 
 
 def _mode_load():
@@ -775,7 +769,8 @@ def _mode_load():
         MS.clear()
         MS.update({"mode": "custom", "since": int(time.time()), "why": "", "phase": None,
                    "known": {}, "last_write": {}, "day": "", "writes": 0, "force": False,
-                   "auto_sub": None, "auto_since": 0, "auto_why": "", "auto_floor": None,
+                   "auto_sub": None, "auto_since": 0, "auto_why": "", "auto_latched": False,
+                   "pv_hi_since": None, "pv_lo_since": None,
                    "status": "", "detail": "", "apply": {}})
         MS.update({k: v for k, v in saved.items() if k in MS})
         if MS["mode"] not in MODES:
@@ -827,79 +822,56 @@ def set_op_mode(mode, why):
     return True
 
 
-def _pot_at(pot, t):
-    """Forecast PV potential (W) at time t, linearly interpolated; None outside the curve."""
-    for i in range(1, len(pot)):
-        (t0, w0), (t1, w1) = pot[i - 1], pot[i]
-        if t0 <= t <= t1:
-            return w0 + (w1 - w0) * (t - t0) / ((t1 - t0) or 1)
-    return None
-
-
-def sun_phase(now):
-    """Is there sun? 'day' / 'night', or None to keep the previous answer. Mornings turn to day
-    once the forecast (or the panels themselves) reach dawn_w; afternoons turn to night once
-    the forecast PV energy left today drops to dusk_kwh and the panels have faded. Without a
-    fresh forecast it falls back to the sun's elevation."""
+def sun_update(now):
+    """Is there sun? Flips MS["phase"] at most once each way per day. Morning -> 'day' once the
+    panels have given pv_on_w for sun_on_s straight (or the sun is dawn_elev° up); evening ->
+    'night' once they've stayed under pv_off_w for sun_off_s while the sun is below dusk_elev°,
+    or it has set. Midday dips are ignored entirely, so a passing cloud can't flip it."""
     geo = _load_pv_geo()
     if not geo:
-        return None
+        return
+    c = MODE_CFG
     el, az = _solar_elev_az(geo[0], geo[1], now)
-    morning = az < 180                          # solar midnight .. solar noon
-    pv = (LIVE.get("pv_w") or 0) if now - LIVE.get("ts", 0) < 90 else 0
-    pot = WX.get("pot") if now - WX.get("ts", 0) < 3 * 3600 else None
-    if pot:
-        if morning:
-            return "day" if max(_pot_at(pot, now) or 0, pv) >= MODE_CFG["dawn_w"] else None
-        left = sum(w for t, w in pot if t >= now) * 0.25 / 1000.0   # 15-min points -> kWh
-        return "night" if (left <= MODE_CFG["dusk_kwh"] and pv < MODE_CFG["dawn_w"] / 2) or el <= 3 else None
-    if morning:
-        return "day" if el >= 12 or pv >= MODE_CFG["dawn_w"] else None
-    return "night" if el <= 8 and pv < MODE_CFG["dawn_w"] / 2 else None
-
-
-def _pv_factor(now):
-    """Actual PV vs the forecast over the last 2 h, counting only while the battery could take
-    more (a full battery makes the inverter throttle PV, which would drag the ratio down)."""
-    act = fc = 0.0
-    n = 0
-    for t, soc, pv, load, pot in _hist:
-        if now - t <= 7200 and pot and pot > 150 and pv is not None and soc is not None and soc < 95:
-            act, fc, n = act + pv, fc + pot, n + 1
-    if n < 20 or fc <= 0:
-        return MODE_CFG["pv_factor"]
-    return max(0.25, min(1.0, act / fc))
-
-
-def _load_estimate(now):
-    loads = sorted(l for t, s, p, l, q in _hist if now - t <= 3 * 3600 and l is not None)
-    return loads[len(loads) // 2] if len(loads) >= 20 else MODE_CFG["load_w"]
+    pv = LIVE.get("pv_w") if now - LIVE.get("ts", 0) < 90 else None   # no data (inverter off): no evidence
+    MS["pv_hi_since"] = (MS.get("pv_hi_since") or now) if pv is not None and pv >= c["pv_on_w"] else None
+    MS["pv_lo_since"] = (MS.get("pv_lo_since") or now) if pv is not None and pv < c["pv_off_w"] else None
+    ph, morning = MS.get("phase"), az < 180          # az < 180: solar midnight .. solar noon
+    new = ph
+    if ph is None:
+        new = "day" if el >= c["dusk_elev"] else "night"
+    elif ph != "day" and morning:
+        if el >= c["dawn_elev"] or (MS["pv_hi_since"] and now - MS["pv_hi_since"] >= c["sun_on_s"]):
+            new = "day"
+    elif ph != "night" and not morning:
+        if el <= 0 or (el < c["dusk_elev"] and MS["pv_lo_since"] and now - MS["pv_lo_since"] >= c["sun_off_s"]):
+            new = "night"
+    if new != ph:
+        MS["phase"] = new
+        if new == "day":                              # a new day starts from the battery as it is
+            soc = LIVE.get("soc")
+            MS["auto_latched"] = soc is not None and soc < c["band_low"]
+        if ph is not None:
+            _mode_event("sun", phase=new)
+        _mode_save()
 
 
 def auto_decide(now, soc):
-    """🤖 Авто: which static set to hold now ('solar' / 'night') and why. By day the battery
-    may carry the flat only while SoC stays above a threshold that rises as the sun left today
-    shrinks: threshold = target − (energy the remaining sun can still put in)/capacity, never
-    below day_floor. So mornings use the battery freely and late afternoons protect it."""
+    """🤖 Авто: which static set to hold now ('solar' / 'night') and why. No sun -> Ніч. By day
+    the battery carries the flat while SoC ≥ band_low; once below, the grid does and the sun
+    recharges it, until band_high. So the evening starts with the battery in the band."""
     c = MODE_CFG
-    if (sun_phase(now) or MS.get("phase")) != "day":
+    if MS.get("phase") != "day":
         return "night", "сонця нема — квартира з мережі, батарея чекає"
-    pot = WX.get("pot") if now - WX.get("ts", 0) < 3 * 3600 else None
-    cur = MS.get("auto_sub") or "solar"
-    if soc is None or not pot:
-        return cur, "є сонце; чекаю даних (заряд / прогноз)"
-    f, load = _pv_factor(now), _load_estimate(now)
-    back = sum(max(0.0, f * w - load) for t, w in pot if t >= now) * 0.25 / 1000.0 * 0.95   # kWh the sun can still add
-    thr = max(c["day_floor"], c["evening_target"] - back / c["battery_kwh"] * 100.0)
-    MS["auto_floor"] = round(thr)
-    want = cur
-    if cur == "solar" and soc < thr - c["hyst_down"]:
-        want = "night"
-    elif cur == "night" and soc >= thr + c["hyst_up"]:
-        want = "solar"
-    if want == "night":
-        return want, "бережу батарею: %d%% < порогу %d%%, сонце до вечора ще дасть ~%.1f кВт·год" % (soc, thr, back)
-    return want, "сонце + батарея: %d%% ≥ порогу %d%%, сонце до вечора ще дасть ~%.1f кВт·год" % (soc, thr, back)
+    if soc is None:
+        return MS.get("auto_sub") or "solar", "є сонце; чекаю даних про заряд"
+    if soc < c["band_low"]:
+        MS["auto_latched"] = True
+    elif soc >= c["band_high"]:
+        MS["auto_latched"] = False
+    if MS.get("auto_latched"):
+        return "night", "бережу батарею: %d%% < %d%% — сонце дозарядить до %d%%, тоді знову батарея" % (
+            soc, c["band_low"], c["band_high"])
+    return "solar", "сонце + батарея · батарея працює, поки заряд ≥ %d%% (зараз %d%%)" % (c["band_low"], soc)
 
 
 def _detail(mode):
@@ -913,13 +885,7 @@ def _detail(mode):
 
 def mode_tick(state, state_lock):
     now = time.time()
-    ph = sun_phase(now)
-    if ph and ph != MS.get("phase"):
-        MS["phase"] = ph
-        _mode_save()
-    if now - LIVE.get("ts", 0) < 90:           # one sample per tick for Авто's forecast / load estimate
-        _hist.append((now, LIVE.get("soc"), LIVE.get("pv_w"), LIVE.get("load_w"),
-                      _pot_at(WX["pot"], now) if WX.get("pot") else None))
+    sun_update(now)
     mode, gen = MS["mode"], MS["since"]
     if mode == "custom":
         MS["status"], MS["detail"] = "custom", MS.get("why") or ""
@@ -1009,7 +975,7 @@ def mode_json():
     return {"mode": m, "name": MODES[m]["name"], "since": MS.get("since"), "why": MS.get("why", ""),
             "status": MS.get("status") or ("custom" if m == "custom" else "waiting"),
             "detail": MS.get("detail", ""), "phase": MS.get("phase"), "apply": MS.get("apply") or {},
-            "auto_sub": MS.get("auto_sub") if m == "auto" else None, "auto_floor": MS.get("auto_floor"),
+            "auto_sub": MS.get("auto_sub") if m == "auto" else None,
             "keys": list(MODES[m]["keys"]), "labels": KEY_LABELS,
             "modes": [{"id": k, "name": v["name"], "desc": v["desc"]} for k, v in MODES.items()],
             "cfg": MODE_CFG, "log": _mode_events[-25:]}
