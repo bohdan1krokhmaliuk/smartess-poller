@@ -59,6 +59,20 @@ td.desc{color:var(--muted); line-height:1.45}
 .ro th.h-prog,.ro th.h-opts,.ro td.prog,.ro td.opts{display:none}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--good);display:inline-block}
 .dot.stale{background:var(--warn)}
+.edit{display:flex; gap:.35rem; align-items:center; flex-wrap:wrap; margin-top:.4rem; font-weight:500; color:var(--text)}
+.edit select{font:inherit; font-size:.8rem; color:var(--text); background:var(--panel); border:1px solid var(--border);
+  border-radius:.45rem; padding:.22rem .4rem; max-width:16rem}
+.edit button{font:inherit; font-size:.76rem; font-weight:600; padding:.24rem .65rem; border-radius:.45rem;
+  border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer}
+.edit button:disabled{opacity:.35; cursor:default}
+.edit select:focus-visible,.edit button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.st{font-size:.74rem; font-weight:600; white-space:normal; color:var(--muted)}
+.st.ok{color:var(--good)} .st.bad{color:var(--bad)}
+.hist{list-style:none; margin:0; padding:.2rem 0}
+.hist li{padding:.5rem .8rem; border-bottom:1px solid var(--grid); font-size:.82rem; line-height:1.45}
+.hist li:last-child{border-bottom:0}
+.hist .t{color:var(--muted); font-variant-numeric:tabular-nums; margin-right:.5rem}
+.hist .empty{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -72,14 +86,18 @@ td.desc{color:var(--muted); line-height:1.45}
 <main>
   <div class="ident" id="ident">…</div>
   <div class="note">
-    <b>Тільки перегляд</b> — ця сторінка нічого не змінює. Показує поточні уставки інвертора
-    (QPIRI) і прапорці приладу (QFLAG): що це, які опції та де в меню. Номери програм —
-    <b>типові для Axpert/VMIII</b>; на своєму екрані звіряйся за <b>назвою</b> пункту.
+    Поточні уставки інвертора (QPIRI) і прапорці приладу (QFLAG): що це, які опції та де в меню.
+    Номери програм — <b>типові для Axpert/VMIII</b>; на своєму екрані звіряйся за <b>назвою</b> пункту.
+    <b>Поля з кнопкою «Змінити»</b> — те, з чого будуються режими. Команда йде в інвертор тільки
+    в <b>local</b>-режимі, приймаються лише значення, які інвертор підтримує, а після ACK значення
+    перечитується з інвертора. Кожна зміна пишеться в його пам'ять (EEPROM) — не клацай без потреби.
     <span class="tag">ок</span> — налаштовано правильно, не чіпаємо.
     <span class="tag man">BMS</span> — у режимі Pylontech інвертор задає це сам, за даними BMS батареї.
-    Довідник команд і значень: <b>github.com/jblance/mpp-solar</b> (PI30).
+    Довідник команд: <b>github.com/jblance/mpp-solar</b> (PI30).
   </div>
   <div id="cats"></div>
+  <div class="section">🕑 Журнал змін уставок</div>
+  <div class="card"><div id="hist"><ul class="hist"><li class="empty">…</li></ul></div></div>
 </main>
 <script>
 // ---- catalog: what each QPIRI setting is, where it lives, what it can be ----
@@ -95,31 +113,33 @@ const CAT = [
     opts:"автоматично (режим Pylontech)",
     desc:"Стеля сумарного струму заряду (сонце + мережа). З Pylontech інвертор налаштовує її сам за даними BMS."},
    {k:"max_ac_charging_current", label:"Макс. струм заряду з мережі", prog:"11", unit:" A",
-    opts:"2–100 A",
-    desc:"Скільки максимум брати саме з мережі на заряд батареї."},
+    opts:"2 · 10 · 20 … 100 A (список дає сам інвертор)",
+    desc:"Скільки максимум брати з мережі на заряд батареї — ручка повільного / швидкого заряду від мережі."},
    {k:"charger_source_priority", enum:1, label:"Пріоритет джерела заряду", prog:"16",
-    opts:"Solar First · Solar + Utility · Only Solar · Utility First",
-    desc:"Звідки заряджати батарею (сонце / мережа / обидва)."},
+    ol:{0:"Спершу мережа",1:"Спершу сонце (CSO)",2:"Сонце + мережа (SNU)",3:"Тільки сонце (OSO)"},
+    opts:"Спершу мережа · Спершу сонце · Сонце + мережа · Тільки сонце",
+    desc:"Звідки заряджати батарею. «Тільки сонце» — мережа батарею не заряджає зовсім."},
  ]},
  { name:"🛡️ Захист і межі батареї", rows:[
-   {k:"battery_type", enum:1, label:"Тип батареї", tag:"ок", prog:"05",
+   {k:"battery_type", enum:1, label:"Тип батареї", tag:"ок", prog:"05", ol:{0:"AGM",1:"Flooded",2:"User",3:"Pylontech"},
     opts:"AGM · Flooded · User · Pylontech",
     desc:"Pylontech — інвертор зв'язаний з BMS батареї кабелем: бере від неї точний SoC і сам налаштовує заряд (програми 02, 26, 27, 29). У нас Pylontech (Felicity) — правильно."},
    {k:"battery_under_voltage", label:"Low DC cut-off (розряд)", tag:"BMS", prog:"29", unit:" V",
     opts:"автоматично (режим Pylontech)",
     desc:"Нижня межа розряду: інвертор вимикається / переходить на мережу. З Pylontech налаштовується автоматично за даними BMS."},
-   {k:"battery_recharge_voltage", label:"Recharge (назад на заряд від мережі)", prog:"12", unit:" V",
-    opts:"перелік напруг (напр. 46–51 В)",
-    desc:"Напруга, за якої відновлюється заряд від мережі."},
-   {k:"battery_redischarge_voltage", label:"Re-discharge (назад на батарею)", prog:"13", unit:" V",
-    opts:"перелік / Full (0 = Full)",
-    desc:"Коли знову віддавати навантаження на батарею (в режимі SBU)."},
+   {k:"battery_recharge_voltage", label:"Перехід на мережу (SBU)", prog:"12", unit:" V",
+    opts:"44–51 V, крок 1 V",
+    desc:"У режимі SBU: коли батарея просяде до цієї напруги, навантаження переходить на мережу. Для LiFePO4 напруга — лише грубий орієнтир заряду; пороги у % зробимо в режимах (Pi бачить точний SoC)."},
+   {k:"battery_redischarge_voltage", label:"Повернення на батарею (SBU)", prog:"13", unit:" V", ol:{0:"FUL (повний заряд)"},
+    opts:"FUL · 48–58 V, крок 1 V",
+    desc:"У режимі SBU: коли батарея знову зарядиться до цієї напруги (FUL — повністю), навантаження повертається на батарею."},
  ]},
  { name:"🔌 Вихід і пріоритети", rows:[
    {k:"output_source_priority", enum:1, label:"Пріоритет виходу (навантаження)", prog:"01",
-    opts:"Utility · Solar · SBU",
-    desc:"Звідки живити навантаження. У тебе Solar-Utility-Bat."},
-   {k:"input_voltage_range", enum:1, label:"Діапазон вхідної AC", prog:"03",
+    ol:{0:"USB — спершу мережа",1:"SUB — сонце, нестача з мережі",2:"SBU — сонце, нестача з батареї"},
+    opts:"USB · SUB · SBU",
+    desc:"Звідки живити навантаження. SBU бере мережу лише коли батарея просіла до порогу (програми 12/13). Перемикання — коротке (~10–20 мс) перекидання навантаження: чутливі прилади можуть блимнути."},
+   {k:"input_voltage_range", enum:1, label:"Діапазон вхідної AC", prog:"03", ol:{0:"Appliance",1:"UPS"},
     opts:"Appliance · UPS",
     desc:"UPS — вужчий діапазон, швидше переходить на батарею."},
    {k:"ac_output_rating_frequency", label:"Вихідна частота", prog:"09", unit:" Hz",
@@ -165,13 +185,37 @@ const CAT = [
  ]},
 ];
 
-const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-function valOf(r,d){
-  if(r.flag){ const v=d[r.k]; return (v===1||v==="1")?"увімк":(v===0||v==="0")?"вимк":"—"; }
-  const raw = r.enum ? (d[r.k+"_name"] ?? d[r.k]) : d[r.k];
-  if(raw===undefined||raw===null||raw==="") return "—";
-  return esc(raw) + (r.enum?"":(r.unit||""));
-}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ROW={}; for(const c of CAT) for(const r of c.rows) ROW[r.k]=r;   // key -> row: label, unit, option labels
+let CATALOG={}, MODE=null, DATA={}, LAST={};   // LAST = result of the latest write, kept across the re-render
+const eq=(a,b)=>a!=null&&b!=null&&a!==""&&b!==""&&Math.abs(Number(a)-Number(b))<1e-6;
+function valText(k,v){ const r=ROW[k]||{};
+  if(v===undefined||v===null||v==="") return "—";
+  if(r.flag) return (v===1||v==="1")?"увімк":(v===0||v==="0")?"вимк":String(v);
+  if(r.ol&&r.ol[Number(v)]!=null) return r.ol[Number(v)];
+  if(r.enum) return String(eq(DATA[k],v)&&DATA[k+"_name"]!=null?DATA[k+"_name"]:v);
+  return (typeof v==="number"&&!Number.isInteger(v)?v.toFixed(1):String(v))+(r.unit||""); }
+// inline editor for the settings the poller can write (from /settings/catalog); flags stay read-only here
+function editor(r){ const spec=CATALOG[r.k]; if(!spec||spec.type==="flag") return "";
+  const vals=spec.type==="enum"?Object.keys(spec.options||{}).map(Number):(spec.choices||[]);
+  const cur=DATA[r.k], off=MODE!=="local";
+  let opts=vals.map(v=>`<option value="${v}"${eq(v,cur)?" selected":""}>${esc(valText(r.k,v))}</option>`).join("");
+  if(!vals.some(v=>eq(v,cur))) opts=`<option value="" selected disabled>—</option>`+opts;
+  const st=LAST.k===r.k?LAST:{cls:"",text:off?"потрібен local-режим":""};
+  return `<div class="edit" data-k="${r.k}"><select${off?" disabled":""} aria-label="${esc(r.label)}">${opts}</select>`+
+    `<button type="button" disabled>Змінити</button><span class="st ${st.cls||""}" role="status">${esc(st.text||"")}</span></div>`; }
+async function apply(k,v,el){
+  const r=ROW[k], st=el.querySelector(".st"), btn=el.querySelector("button"), sel=el.querySelector("select");
+  if(!confirm(`Змінити «${r.label}»\n${valText(k,DATA[k])} → ${valText(k,v)}?\n\nКоманда піде в інвертор і запишеться в його пам'ять.`)){
+    sel.value=String(DATA[k]??""); btn.disabled=true; return; }
+  btn.disabled=true; sel.disabled=true; st.className="st"; st.textContent="⏳ надсилаю в інвертор…";
+  let j; try{ const res=await fetch("/set",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:k,value:v})}); j=await res.json(); }
+  catch(e){ j={ok:false,error:"немає зв'язку з poller"}; }
+  if(j.ok&&j.changed===false) LAST={k,cls:"ok",text:"вже так — нічого не писали"};
+  else if(j.ok&&j.verified) LAST={k,cls:"ok",text:"✓ застосовано"};
+  else if(j.ok) LAST={k,cls:"bad",text:"⚠ ACK, але інвертор показує "+valText(k,j.value)};
+  else LAST={k,cls:"bad",text:"✗ "+(j.reply==="NAK"?"інвертор відхилив (NAK)":(j.error||j.reply||"не вдалося"))};
+  await load(); }
 function render(d){
   const host=document.getElementById("cats"); host.innerHTML="";
   for(const c of CAT){
@@ -179,7 +223,7 @@ function render(d){
     const card=document.createElement("div"); card.className="card"+(c.ro?" ro":"");
     const rows=c.rows.map(r=>`<tr>
       <td class="param">${esc(r.label)}${r.tag?`<span class="tag${r.tag==="BMS"?" man":""}">${esc(r.tag)}</span>`:""}</td>
-      <td class="now">${valOf(r,d)}</td>
+      <td class="now">${esc(valText(r.k,d[r.k]))}${editor(r)}</td>
       <td class="prog">${r.prog?esc(r.prog):"—"}</td>
       <td class="opts">${r.opts?esc(r.opts):"—"}</td>
       <td class="desc">${r.desc?esc(r.desc):""}</td>
@@ -190,19 +234,35 @@ function render(d){
       <tbody>${rows}</tbody></table></div>`;
     host.append(card);
   }
+  host.querySelectorAll(".edit").forEach(el=>{ const k=el.dataset.k, sel=el.querySelector("select"), btn=el.querySelector("button");
+    sel.addEventListener("change",()=>{ btn.disabled=sel.value===""||eq(sel.value,DATA[k]); });
+    btn.addEventListener("click",()=>apply(k,Number(sel.value),el)); });
 }
+// settings change-log (/rated/history): every change the inverter reported, whoever made it (here, SmartESS, LCD)
+function renderHist(ev){ const host=document.getElementById("hist"), items=[];
+  for(const e of (ev||[]).slice().reverse()){
+    const ch=(e.changes||[]).filter(c=>c.old!==null&&c.old!==undefined&&ROW[c.key]);   // skip first-seen snapshots
+    if(!ch.length) continue;
+    const t=new Date(e.ts*1000).toLocaleString("uk-UA",{day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"});
+    items.push(`<li><span class="t">${esc(t)}</span>`+ch.map(c=>`<b>${esc(ROW[c.key].label)}</b>: ${esc(valText(c.key,c.old))} → ${esc(valText(c.key,c.new))}`).join(" · ")+`</li>`);
+    if(items.length>=25) break; }
+  host.innerHTML=`<ul class="hist">${items.length?items.join(""):'<li class="empty">Змін ще не було.</li>'}</ul>`; }
 async function load(){
-  let info={}, rated={};
-  try{ info=await (await fetch("/info")).json(); }catch(e){}
-  try{ rated=await (await fetch("/rated")).json(); }catch(e){}
-  const has=rated && Object.keys(rated).length;
+  let info={}, rated={}, cat={}, ctl={}, hist=[];
+  const get=(u,f)=>fetch(u).then(r=>r.json()).then(f).catch(()=>{});
+  await Promise.all([get("/info",j=>info=j), get("/rated",j=>rated=j), get("/settings/catalog",j=>cat=j),
+                     get("/control",j=>ctl=j), get("/rated/history",j=>hist=j)]);
+  DATA=rated||{}; CATALOG=cat||{}; MODE=(ctl&&ctl.mode)||null;
+  const has=Object.keys(DATA).length;
   document.getElementById("fresh").className="dot"+(has?"":" stale");
   document.getElementById("ident").innerHTML =
     `<b>${esc(info.model||"—")}</b> · SN ${esc(info.serial||"—")} · ${esc(info.protocol||"")} `+
-    `· прошивка ${esc(info.firmware||"—")}` + (has?"":" · <span style='color:var(--warn)'>уставки ще не зчитані (потрібен local-режим)</span>");
-  render(rated||{});
+    `· прошивка ${esc(info.firmware||"—")} · режим <b>${esc(MODE||"—")}</b>`+
+    (MODE&&MODE!=="local"?" <span style='color:var(--warn)'>(зміни вимкнено — потрібен local)</span>":"")+
+    (has?"":" · <span style='color:var(--warn)'>уставки ще не зчитані (потрібен local-режим)</span>");
+  render(DATA); renderHist(hist);
 }
-document.getElementById("reload").addEventListener("click",load);
+document.getElementById("reload").addEventListener("click",()=>{ LAST={}; load(); });
 document.getElementById("theme").addEventListener("click",()=>{
   const cur=document.documentElement.getAttribute("data-theme");
   const next=cur==="dark"?"light":(cur==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));

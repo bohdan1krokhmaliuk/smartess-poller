@@ -136,14 +136,18 @@ def pi30_cmd(cmd):
     return b"\xff\x04" + a + _pi30_crc(a) + b"\x0d"
 
 
-def queue_cmd(ascii_cmd):
-    """Thread-safe: ask the local poll loop to send a PI30 SET command over RS485 and
-    block briefly for the ACK/NAK. Returns {ok, reply, cmd}. Local mode only (the loop
-    owns the bus). The loop re-reads QPIRI+QFLAG after a successful write."""
+def queue_cmd(cmds):
+    """Thread-safe: ask the local poll loop to send a PI30 command over RS485 and block
+    briefly for the reply. `cmds` is one ASCII command, or a list of alternative formats
+    tried in order until one isn't NAK'd (e.g. MUCHGC030 / MUCHGC0030). Returns
+    {ok, reply, cmd}. Local mode only (the loop owns the bus). After an ACK the loop
+    re-reads QPIRI+QFLAG, so RATED_ALL already holds the result when this returns."""
+    if isinstance(cmds, str):
+        cmds = [cmds]
     ev = threading.Event()
-    box = {"ok": None, "reply": "", "cmd": ascii_cmd}
-    _cmd_q.put((ascii_cmd, ev, box))
-    ev.wait(timeout=20)                                 # loop drains once per poll (~10 s)
+    box = {"ok": None, "reply": "", "cmd": cmds[0]}
+    _cmd_q.put((list(cmds), ev, box))
+    ev.wait(timeout=25)                                 # loop drains once per poll (~10 s)
     return box
 
 # device identity, filled as the static commands come in; served at /info
@@ -152,6 +156,8 @@ INFO = {}
 RATED = {}
 # full parsed QPIRI snapshot (all fields + enum *_name), served read-only at /rated
 RATED_ALL = {}
+# values the inverter itself says it accepts for a setting (e.g. QMUCHGCR), read at connect
+ALLOWED = {}
 # latest decoded QPIWS warnings/faults, served at /warnings
 WARN = {"active": [], "raw": "", "level": "ok"}
 # dashboard settings shared across clients (served/saved at /settings)
@@ -610,55 +616,81 @@ QPIRI_ENUMS = {
 }
 
 # --------------------------------------------------------- settings CONTROL (write)
-# Controllable settings via PI30 SET commands. Every value is validated and hard-clamped
-# to a safe LiFePO4 range; writes are LOCAL-mode only and confirmed by a QPIRI re-read.
+# The knobs the operating modes are built from, written via PI30 SET commands. A value is
+# only accepted if it's one the inverter takes (enum option / discrete choice), so nothing
+# is ever clamped into something unintended. Writes are LOCAL-mode only and confirmed by
+# a QPIRI re-read.
 # The battery runs in Pylontech mode (BMS cable): the inverter sets max charging current,
 # bulk, float and low-DC cut-off (programs 02/26/27/29) automatically from the BMS, so
 # those aren't writable here — nor is the battery type (changing it drops the BMS link).
-# The utility charge-current setter (MUCHGC) is intentionally omitted until its exact
-# format is confirmed on this firmware.
-def _vset(prefix, lo, hi):
-    return {"type": "float", "min": lo, "max": hi, "step": 0.1,
-            "cmd": lambda v: "%s%.1f" % (prefix, max(lo, min(hi, float(v))))}
+MUCHGC_FALLBACK = [2, 10, 20, 30, 40, 50, 60]   # used only until QMUCHGCR has been read
 
 SET_CATALOG = {
-    "battery_recharge_voltage":    _vset("PBCV", 44.0, 51.0),
-    "battery_redischarge_voltage": {"type": "float", "min": 0.0, "max": 58.0, "step": 0.1,
-                                    "cmd": lambda v: "PBDV%.1f" % max(0.0, min(58.0, float(v)))},
+    # program 01: what feeds the load — 0 USB (grid first), 1 SUB (solar, then grid), 2 SBU (solar, then battery)
     "output_source_priority":      {"type": "enum", "options": {0: "Utility", 1: "Solar", 2: "SBU"},
-                                    "cmd": lambda v: "POP%02d" % int(v)},
+                                    "cmds": lambda v: ["POP%02d" % v]},
+    # program 16: what charges the battery
     "charger_source_priority":     {"type": "enum", "options": {0: "UtilityFirst", 1: "SolarFirst",
                                                                 2: "Solar+Utility", 3: "OnlySolar"},
-                                    "cmd": lambda v: "PCP%02d" % int(v)},
+                                    "cmds": lambda v: ["PCP%02d" % v]},
+    # program 11: max grid (AC) charge current — the slow / fast grid-charge knob. Allowed values
+    # come from the inverter (QMUCHGCR); single units take 3 digits, parallel-capable ones "0"+3.
+    "max_ac_charging_current":     {"type": "choice", "unit": "A",
+                                    "choices": lambda: ALLOWED.get("max_ac_charging_current") or MUCHGC_FALLBACK,
+                                    "cmds": lambda v: ["MUCHGC%03d" % v, "MUCHGC0%03d" % v]},
+    # programs 12/13 (48 V models), used in SBU: hand the load to the grid when the battery falls
+    # to X V; take it back once the battery recovers to Y V (0 = FUL, fully charged)
+    "battery_recharge_voltage":    {"type": "choice", "unit": "V",
+                                    "choices": lambda: [float(v) for v in range(44, 52)],
+                                    "cmds": lambda v: ["PBCV%04.1f" % v]},
+    "battery_redischarge_voltage": {"type": "choice", "unit": "V",
+                                    "choices": lambda: [0.0] + [float(v) for v in range(48, 59)],
+                                    "cmds": lambda v: ["PBDV%04.1f" % v]},
 }
 FLAG_LETTERS = {"flag_" + name: letter for letter, name in QFLAG_NAMES.items()}
 
 
 def build_set_cmd(key, value):
-    """Return the ASCII PI30 SET command for (key, value), validated/clamped, or None."""
+    """Return (value, [candidate PI30 SET commands]) for (key, value), or None if the key
+    is unknown or the value isn't one the inverter accepts."""
     spec = SET_CATALOG.get(key)
-    if spec:
-        try:
-            if spec["type"] == "enum":
-                return spec["cmd"](int(value)) if int(value) in spec["options"] else None
-            return spec["cmd"](float(value))
-        except (ValueError, TypeError):
+    try:
+        if spec and spec["type"] == "enum":
+            v = int(value)
+            return (v, spec["cmds"](v)) if v in spec["options"] else None
+        if spec and spec["type"] == "choice":
+            v = float(value)
+            for c in spec["choices"]():
+                if abs(c - v) < 1e-6:
+                    return c, spec["cmds"](c)
             return None
+    except (ValueError, TypeError):
+        return None
     if key in FLAG_LETTERS:
         on = str(value).lower() in ("1", "true", "on")
-        return "P" + ("E" if on else "D") + FLAG_LETTERS[key]
+        return (1 if on else 0), ["P" + ("E" if on else "D") + FLAG_LETTERS[key]]
     return None
 
 
+def same_setting(a, b):
+    """True when a current setting value already equals the requested one."""
+    try:
+        return a is not None and b is not None and abs(float(a) - float(b)) < 1e-6
+    except (TypeError, ValueError):
+        return False
+
+
 def catalog_json():
-    """Serializable description of the controllable settings, for the dashboard UI."""
+    """Serializable description of the controllable settings, for the settings page."""
     out = {}
     for key, spec in SET_CATALOG.items():
         d = {"type": spec["type"]}
         if "options" in spec:
             d["options"] = spec["options"]
-        if "min" in spec:
-            d.update(min=spec["min"], max=spec["max"], step=spec.get("step", 0.1))
+        if "choices" in spec:
+            d["choices"] = spec["choices"]()
+        if "unit" in spec:
+            d["unit"] = spec["unit"]
         out[key] = d
     for key in FLAG_LETTERS:
         out[key] = {"type": "flag"}
@@ -1068,28 +1100,39 @@ def handle_fakeclient(sock, mc, cfg):
         publish_qflag(mc, topic, voltronic_text(request(sock, reader, QFLAG)))
     except Exception:
         pass
+    try:                                     # grid-charge currents this model accepts (validates /set, feeds the UI)
+        amps = [int(x) for x in (voltronic_text(request(sock, reader, pi30_cmd("QMUCHGCR"))) or "").split()
+                if x.isdigit()]
+        if amps:
+            ALLOWED["max_ac_charging_current"] = amps
+    except Exception:
+        pass
 
     last_keepalive = time.time()
     last_energy = 0.0
     last_rated = 0.0
     while True:
-        # apply any queued SET command (settings-control API)
+        # apply any queued command (settings-control API, read-only Q probes)
         while True:
             try:
-                _ascii, _ev, _box = _cmd_q.get_nowait()
+                _cmds, _ev, _box = _cmd_q.get_nowait()
             except queue.Empty:
                 break
             try:
-                _rep = voltronic_text(request(sock, reader, pi30_cmd(_ascii)))
-                _box["ok"] = (_rep == "ACK")
-                _box["reply"] = _rep if _rep is not None else "(no reply)"
+                for _ascii in _cmds:                             # alternative formats, tried in order
+                    _rep = voltronic_text(request(sock, reader, pi30_cmd(_ascii)))
+                    _box["cmd"] = _ascii
+                    _box["ok"] = (_rep == "ACK")
+                    _box["reply"] = _rep if _rep is not None else "(no reply)"
+                    print(time.strftime("%H:%M:%S"), "CMD", _ascii, "->", _box["reply"])
+                    if _rep != "NAK":                            # ACK, data or no reply: never re-send in another format
+                        break
                 if _box["ok"]:                                   # confirm by re-reading the rated info
                     dispatch_reply(mc, topic, "QPIRI", request(sock, reader, QPIRI))
                     try:
                         publish_qflag(mc, topic, voltronic_text(request(sock, reader, QFLAG)))
                     except Exception:
                         pass
-                print(time.strftime("%H:%M:%S"), "SET", _ascii, "->", _box["reply"])
             except Exception as _e:
                 _box["ok"], _box["reply"] = False, str(_e)
             finally:
@@ -1419,24 +1462,9 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 self._reply(200, "application/json", json.dumps(catalog_json()))
                 return
 
-            if path.startswith("/set/"):               # write ONE setting: /set/<key>?value=<v>
-                key = path[len("/set/"):].strip("/")
-                value = next((kv[6:] for kv in query.split("&") if kv.startswith("value=")), None)
-                cmd = build_set_cmd(key, value)
-                if cmd is None:
-                    self._reply(400, "application/json", json.dumps(
-                        {"ok": False, "error": "unknown/invalid setting or value", "key": key}))
-                    return
-                with state_lock:
-                    cur_mode = state["mode"]
-                if cur_mode != "local":                # never touch the bus in mirror mode
-                    self._reply(409, "application/json", json.dumps(
-                        {"ok": False, "error": "settings write needs local mode", "mode": cur_mode}))
-                    return
-                box = queue_cmd(cmd)
-                self._reply(200, "application/json", json.dumps(
-                    {"ok": bool(box["ok"]), "reply": box.get("reply", ""), "key": key, "cmd": cmd,
-                     "value": RATED_ALL.get(key), "value_name": RATED_ALL.get(key + "_name")}))
+            if path == "/set" or path.startswith("/set/"):   # writes are POST-only (see do_POST)
+                self._reply(405, "application/json", json.dumps(
+                    {"ok": False, "error": "use POST /set with a JSON body {\"key\": ..., \"value\": ...}"}))
                 return
 
             if path.startswith("/vm/"):
@@ -1484,12 +1512,18 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 return
 
             if path == "/rated/history":               # settings change-log (JSONL -> array)
+                events = []
                 try:
                     with open(RATED_HISTORY_FILE) as f:
-                        events = [json.loads(ln) for ln in f if ln.strip()][-200:]
+                        for ln in f:
+                            try:
+                                if ln.strip():
+                                    events.append(json.loads(ln))
+                            except Exception:
+                                pass                   # skip a corrupt/partial line, don't drop the whole log
                 except Exception:
-                    events = []
-                self._reply(200, "application/json", json.dumps(events))
+                    pass
+                self._reply(200, "application/json", json.dumps(events[-200:]))
                 return
 
             if path == "/warnings/history":            # warning/fault change-log (JSONL -> array)
@@ -1580,6 +1614,57 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                     self._reply(200, "application/json", json.dumps({"ok": True}))
                 except Exception as e:
                     self._reply(400, "application/json", json.dumps({"error": str(e)}))
+                return
+
+            if path == "/set":                          # write ONE setting: JSON {"key": ..., "value": ...}
+                try:
+                    n = int(self.headers.get("Content-Length", 0) or 0)
+                except ValueError:
+                    n = -1
+                if n <= 0 or n > 1024:
+                    self.close_connection = True        # never leave an unread body on a keep-alive socket
+                    self._reply(400, "application/json", json.dumps({"ok": False, "error": "bad length"}))
+                    return
+                body = self.rfile.read(n)
+                # JSON-only + same-origin, so a site open in your browser can't trigger a write
+                # (a cross-site JSON POST needs a CORS preflight, which this server never grants)
+                org = (self.headers.get("Origin") or "").split("://", 1)[-1].rstrip("/")
+                if org and org != (self.headers.get("Host") or ""):
+                    self._reply(403, "application/json", json.dumps({"ok": False, "error": "cross-origin write refused"}))
+                    return
+                if "application/json" not in (self.headers.get("Content-Type") or ""):
+                    self._reply(415, "application/json", json.dumps({"ok": False, "error": "JSON body required"}))
+                    return
+                try:
+                    req = json.loads(body.decode("utf-8"))
+                    key, value = str(req.get("key", "")), req.get("value")
+                except Exception:
+                    self._reply(400, "application/json", json.dumps({"ok": False, "error": "bad JSON"}))
+                    return
+                built = build_set_cmd(key, value)
+                if built is None:
+                    self._reply(400, "application/json", json.dumps(
+                        {"ok": False, "error": "unknown setting, or a value the inverter doesn't accept", "key": key}))
+                    return
+                want, cmds = built
+                with state_lock:
+                    cur_mode = state["mode"]
+                if cur_mode != "local":                 # never touch the bus in mirror mode
+                    self._reply(409, "application/json", json.dumps(
+                        {"ok": False, "error": "settings write needs local mode", "mode": cur_mode}))
+                    return
+                old = RATED_ALL.get(key)
+                if same_setting(old, want):             # already set: skip the write (spares the EEPROM)
+                    self._reply(200, "application/json", json.dumps(
+                        {"ok": True, "changed": False, "verified": True, "key": key, "old": old,
+                         "value": old, "value_name": RATED_ALL.get(key + "_name")}))
+                    return
+                box = queue_cmd(cmds)
+                new = RATED_ALL.get(key)               # already re-read from the inverter after an ACK
+                self._reply(200, "application/json", json.dumps(
+                    {"ok": bool(box["ok"]), "changed": bool(box["ok"]), "verified": same_setting(new, want),
+                     "reply": box.get("reply", ""), "cmd": box.get("cmd"), "key": key, "old": old,
+                     "value": new, "value_name": RATED_ALL.get(key + "_name")}))
                 return
 
             if path == "/vmq":                          # batched VM queries → run concurrently, return aligned results

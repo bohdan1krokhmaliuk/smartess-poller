@@ -228,6 +228,11 @@ The poller's web server (config `control_port`, default `8899`) exposes:
 GET /                    the dashboard (web/index.html)
 GET /vm/api/v1/query…    read-only VictoriaMetrics proxy (query / query_range / labels)
 GET /control/local|mirror   switch mode (returns JSON); GET /control returns current mode
+GET /inverter.html       inverter settings page: current values + editors for the writable ones
+GET /rated               current inverter settings (QPIRI + QFLAG); /rated/history = change log
+GET /settings/catalog    writable settings and the values the inverter accepts
+POST /set                write ONE setting, JSON {"key": ..., "value": ...} — local mode only,
+                         same-origin only; skipped if unchanged, verified by re-reading QPIRI
 ```
 
 Front it with your existing Caddy:
