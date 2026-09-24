@@ -27,6 +27,7 @@ Environment variables (SMARTESS_*) override both. No code editing required.
 """
 
 import calendar
+import collections
 import concurrent.futures
 import configparser
 import math
@@ -136,19 +137,25 @@ def pi30_cmd(cmd):
     return b"\xff\x04" + a + _pi30_crc(a) + b"\x0d"
 
 
-def queue_cmd(cmds, ttl=30):
-    """Thread-safe: ask the local poll loop to send a PI30 command over RS485 and block
-    briefly for the reply. `cmds` is one ASCII command, or a list of alternative formats
-    tried in order until one isn't NAK'd (e.g. MUCHGC030 / MUCHGC0030). Returns
-    {ok, reply, cmd}. Local mode only (the loop owns the bus). After an ACK the loop
-    re-reads QPIRI+QFLAG, so RATED_ALL already holds the result when this returns.
-    A command not sent within `ttl` seconds (inverter off, dongle reconnecting) is
-    dropped instead of firing late."""
+def enqueue_cmd(cmds, ttl=30):
+    """Queue a PI30 command for the local poll loop without waiting; returns (event, box).
+    `cmds` is one ASCII command, or a list of alternative formats tried in order until one
+    isn't NAK'd (e.g. MUCHGC030 / MUCHGC0030). The loop drains the whole queue each cycle,
+    so several queued at once go out back-to-back. A command not sent within `ttl` seconds
+    (inverter off, dongle reconnecting) is dropped instead of firing late."""
     if isinstance(cmds, str):
         cmds = [cmds]
     ev = threading.Event()
     box = {"ok": None, "reply": "", "cmd": cmds[0], "deadline": time.time() + ttl}
     _cmd_q.put((list(cmds), ev, box))
+    return ev, box
+
+
+def queue_cmd(cmds, ttl=30):
+    """Thread-safe: send a PI30 command over RS485 via the local poll loop and block briefly
+    for the reply. Returns {ok, reply, cmd}. Local mode only (the loop owns the bus). After an
+    ACK the loop re-reads QPIRI+QFLAG, so RATED_ALL already holds the result when this returns."""
+    ev, box = enqueue_cmd(cmds, ttl)
     ev.wait(timeout=min(ttl, 25))                       # loop drains once per poll (~10 s)
     return box
 
@@ -703,21 +710,27 @@ def catalog_json():
 
 
 # ------------------------------------------------------------------ operating modes
-# A mode is a desired set of the settings above plus a little logic. mode_loop() applies
-# it: it writes only the fields that differ, only while the inverter is reachable (local
-# mode, fresh data), never fights a manual change (that turns the mode into "custom"), and
-# the chosen mode survives restarts. ☀ Сонце and 🌙 Ніч hand over to each other at dusk
-# and dawn; 🛡 Блекаут and ✋ Custom stay until another mode is picked.
+# A mode is a STATIC set of the settings above: while it's selected, those values hold.
+# 🤖 Авто is the only one with logic: it holds ☀ Сонце while there's sun and 🌙 Ніч when
+# there isn't, and by day it moves to Ніч early when that's what it takes to reach the
+# evening with the battery ~80% full from the sun (auto_decide). mode_loop() applies the
+# chosen set: only the fields that differ, only while the inverter is reachable (LOCAL,
+# fresh data), all queued in one go with an "n of m" progress count. Editing a mode field
+# by hand switches to ✋ Custom; the choice survives restarts.
 MODE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mode_state.json")
 MODE_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mode_log.jsonl")
 MODE_CFG = {
-    "floor": 50,              # ☀ at/below this SoC the flat goes to the grid (SUB), keeping a reserve
-    "resume": 80,             # ☀ ...and back to the battery (SBU) once it has recharged to this
-    "night_reserve": 50,      # 🌙 top the battery up from the grid only while it's below this
-    "night_charge_a": 10,     # 🌙 ...slowly (~0.5 kW)
+    "battery_kwh": 8.75,      # usable capacity (Felicity 51.2 V × 171 Ah)
+    "evening_target": 80,     # 🤖 reach dusk with at least this SoC, from the sun...
+    "day_floor": 50,          # 🤖 ...and never go below this by day
+    "hyst_down": 2,           # 🤖 Сонце -> Ніч once SoC is this far below the threshold
+    "hyst_up": 3,             # 🤖 Ніч -> Сонце once it's this far above it
+    "dwell_s": 1200,          # 🤖 hold Сонце / Ніч at least 20 min before switching again
+    "load_w": 450,            # 🤖 load assumed for the rest of the day until measured
+    "pv_factor": 0.8,         # 🤖 trust in the forecast until today's actual/forecast ratio is known
     "blackout_charge_a": 40,  # 🛡 grid charge current (~2 kW)
-    "dawn_w": 300,            # morning: day starts once the forecast PV potential reaches this
-    "dusk_kwh": 0.3,          # afternoon: night starts once the forecast PV energy left today drops to this
+    "dawn_w": 300,            # sun: day once the forecast (or actual) PV reaches this...
+    "dusk_kwh": 0.3,          # ...night once the forecast PV energy left today drops to this
     "min_gap_s": 300,         # the controller rewrites a field at most this often...
     "daily_cap": 48,          # ...and makes at most this many writes a day (EEPROM guard)
 }
@@ -726,27 +739,30 @@ OUT_SUB, OUT_SBU = 1, 2
 CHG_SNU, CHG_OSO = 2, 3
 KEY_LABELS = {_OUT: "пріоритет виходу", _CHG: "пріоритет заряду", _ACA: "струм заряду з мережі"}
 MODES = {
-    "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG),
-                 "desc": "Вдень SBU: сонце — в квартиру, нестача — з батареї; мережа лише коли заряд "
-                         "впаде до 50% (і до 80%). Батарея заряджається тільки від сонця. Коли сонце "
-                         "вичерпається, сам перейде в 🌙 Ніч."},
-    "night":    {"name": "🌙 Ніч", "keys": (_OUT, _CHG, _ACA),
-                 "desc": "Квартира з мережі (SUB), батарея не розряджається — чекає як ДБЖ. Від мережі "
-                         "не заряджає; лише якщо заряд нижче 50% — повільно (10 A) дозаряджає до 50%. "
-                         "На світанку сам перейде в ☀️ Сонце."},
+    "auto":     {"name": "🤖 Авто", "keys": (_OUT, _CHG), "set": None,
+                 "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за тим, чи є сонце. Вдень — сонце й батарея, але "
+                         "так, щоб під вечір батарея була ~80% від сонця: коли решти сонця вже ледь вистачає, "
+                         "переходить на Ніч і дає сонцю дозарядити батарею. Без сонця — мережа."},
+    "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG), "set": {_OUT: OUT_SBU, _CHG: CHG_OSO},
+                 "desc": "SBU: сонце — в квартиру, нестача — з батареї, мережа лише коли батарея сіла. "
+                         "Батарею заряджає тільки сонце."},
+    "night":    {"name": "🌙 Ніч", "keys": (_OUT, _CHG), "set": {_OUT: OUT_SUB, _CHG: CHG_OSO},
+                 "desc": "SUB: квартира з сонця, нестача — з мережі; батарея не розряджається (чекає як ДБЖ) "
+                         "і заряджається тільки від сонця."},
     "blackout": {"name": "🛡️ Блекаут", "keys": (_OUT, _CHG, _ACA),
-                 "desc": "Тримає батарею повною для відключень: квартира з сонця й мережі (SUB), "
-                         "батарея — лише коли зникне мережа; заряд від сонця й мережі, 40 A. "
-                         "Сам нікуди не перемикається."},
-    "custom":   {"name": "✋ Custom", "keys": (),
+                 "set": {_OUT: OUT_SUB, _CHG: CHG_SNU, _ACA: MODE_CFG["blackout_charge_a"]},
+                 "desc": "Бережемо батарею повною: є мережа — квартира з сонця й мережі, батарея не "
+                         "розряджається і заряджається від сонця й мережі (40 A); зникла мережа — сонце + батарея."},
+    "custom":   {"name": "✋ Custom", "keys": (), "set": {},
                  "desc": "Pi нічого не змінює — керуєш сам (сторінка налаштувань, екран інвертора, SmartESS)."},
 }
-LIVE = {}                  # latest SoC from QPIGS: ts, soc
+LIVE = {}                  # latest QPIGS numbers: ts, soc, pv_w, load_w
 WX = {}                    # today's forecast PV potential: ts, pot=[(epoch, W)]
 MS = {}                    # persisted mode state, see _mode_load()
 _mode_lock = threading.Lock()
 _mode_wake = threading.Event()
 _mode_events = []          # in-memory tail of the mode log
+_hist = collections.deque(maxlen=400)   # one (ts, soc, pv_w, load_w, forecast_w) sample per controller tick
 
 
 def _mode_load():
@@ -758,8 +774,9 @@ def _mode_load():
     with _mode_lock:
         MS.clear()
         MS.update({"mode": "custom", "since": int(time.time()), "why": "", "phase": None,
-                   "latched": False, "topup": False, "known": {}, "last_write": {},
-                   "day": "", "writes": 0, "force": False, "status": "", "detail": ""})
+                   "known": {}, "last_write": {}, "day": "", "writes": 0, "force": False,
+                   "auto_sub": None, "auto_since": 0, "auto_why": "", "auto_floor": None,
+                   "status": "", "detail": "", "apply": {}})
         MS.update({k: v for k, v in saved.items() if k in MS})
         if MS["mode"] not in MODES:
             MS["mode"] = "custom"
@@ -797,13 +814,13 @@ def _mode_event(kind, **kw):
 
 
 def set_op_mode(mode, why):
-    """Switch the operating mode: from the UI, a dusk/dawn hand-over, or a manual change."""
+    """Switch the operating mode: from the UI, or to Custom after a hand edit."""
     if mode not in MODES:
         return False
     with _mode_lock:
         prev = MS.get("mode")
-        MS.update(mode=mode, since=int(time.time()), why=why, known={}, latched=False,
-                  topup=False, force=True, status="", detail="")
+        MS.update(mode=mode, since=int(time.time()), why=why, known={}, force=True,
+                  auto_sub=None, auto_since=0, auto_why="", status="", detail="", apply={})
         _mode_save()
     _mode_event("mode", mode=mode, prev=prev, why=why)
     _mode_wake.set()
@@ -820,80 +837,89 @@ def _pot_at(pot, t):
 
 
 def sun_phase(now):
-    """'day' / 'night' for the Сонце ⇄ Ніч hand-over, or None to keep the current one. In the
-    morning, day starts once the forecast PV potential reaches dawn_w; in the afternoon, night
-    starts once the forecast PV energy left today drops to dusk_kwh. Without a fresh forecast
-    it falls back to the sun's elevation."""
+    """Is there sun? 'day' / 'night', or None to keep the previous answer. Mornings turn to day
+    once the forecast (or the panels themselves) reach dawn_w; afternoons turn to night once
+    the forecast PV energy left today drops to dusk_kwh and the panels have faded. Without a
+    fresh forecast it falls back to the sun's elevation."""
     geo = _load_pv_geo()
     if not geo:
         return None
     el, az = _solar_elev_az(geo[0], geo[1], now)
     morning = az < 180                          # solar midnight .. solar noon
+    pv = (LIVE.get("pv_w") or 0) if now - LIVE.get("ts", 0) < 90 else 0
     pot = WX.get("pot") if now - WX.get("ts", 0) < 3 * 3600 else None
     if pot:
         if morning:
-            cur = _pot_at(pot, now)
-            return "day" if (cur is not None and cur >= MODE_CFG["dawn_w"]) or el >= 20 else None
+            return "day" if max(_pot_at(pot, now) or 0, pv) >= MODE_CFG["dawn_w"] else None
         left = sum(w for t, w in pot if t >= now) * 0.25 / 1000.0   # 15-min points -> kWh
-        return "night" if left <= MODE_CFG["dusk_kwh"] or el <= 3 else None
+        return "night" if (left <= MODE_CFG["dusk_kwh"] and pv < MODE_CFG["dawn_w"] / 2) or el <= 3 else None
     if morning:
-        return "day" if el >= 12 else None
-    return "night" if el <= 8 else None
+        return "day" if el >= 12 or pv >= MODE_CFG["dawn_w"] else None
+    return "night" if el <= 8 and pv < MODE_CFG["dawn_w"] / 2 else None
 
 
-def mode_desired(mode, soc):
-    """Field values `mode` wants right now; updates the Сонце / Ніч hysteresis state."""
+def _pv_factor(now):
+    """Actual PV vs the forecast over the last 2 h, counting only while the battery could take
+    more (a full battery makes the inverter throttle PV, which would drag the ratio down)."""
+    act = fc = 0.0
+    n = 0
+    for t, soc, pv, load, pot in _hist:
+        if now - t <= 7200 and pot and pot > 150 and pv is not None and soc is not None and soc < 95:
+            act, fc, n = act + pv, fc + pot, n + 1
+    if n < 20 or fc <= 0:
+        return MODE_CFG["pv_factor"]
+    return max(0.25, min(1.0, act / fc))
+
+
+def _load_estimate(now):
+    loads = sorted(l for t, s, p, l, q in _hist if now - t <= 3 * 3600 and l is not None)
+    return loads[len(loads) // 2] if len(loads) >= 20 else MODE_CFG["load_w"]
+
+
+def auto_decide(now, soc):
+    """🤖 Авто: which static set to hold now ('solar' / 'night') and why. By day the battery
+    may carry the flat only while SoC stays above a threshold that rises as the sun left today
+    shrinks: threshold = target − (energy the remaining sun can still put in)/capacity, never
+    below day_floor. So mornings use the battery freely and late afternoons protect it."""
     c = MODE_CFG
-    if mode == "solar":
-        if soc is not None:
-            if soc <= c["floor"]:
-                MS["latched"] = True
-            elif soc >= c["resume"]:
-                MS["latched"] = False
-        return {_OUT: OUT_SUB if MS["latched"] else OUT_SBU, _CHG: CHG_OSO}
-    if mode == "night":
-        if soc is not None:
-            if soc < c["night_reserve"] - 2:
-                MS["topup"] = True
-            elif soc >= c["night_reserve"]:
-                MS["topup"] = False
-        want = {_OUT: OUT_SUB, _CHG: CHG_SNU if MS["topup"] else CHG_OSO}
-        if MS["topup"]:
-            want[_ACA] = c["night_charge_a"]
-        return want
-    if mode == "blackout":
-        return {_OUT: OUT_SUB, _CHG: CHG_SNU, _ACA: c["blackout_charge_a"]}
-    return {}
+    if (sun_phase(now) or MS.get("phase")) != "day":
+        return "night", "сонця нема — квартира з мережі, батарея чекає"
+    pot = WX.get("pot") if now - WX.get("ts", 0) < 3 * 3600 else None
+    cur = MS.get("auto_sub") or "solar"
+    if soc is None or not pot:
+        return cur, "є сонце; чекаю даних (заряд / прогноз)"
+    f, load = _pv_factor(now), _load_estimate(now)
+    back = sum(max(0.0, f * w - load) for t, w in pot if t >= now) * 0.25 / 1000.0 * 0.95   # kWh the sun can still add
+    thr = max(c["day_floor"], c["evening_target"] - back / c["battery_kwh"] * 100.0)
+    MS["auto_floor"] = round(thr)
+    want = cur
+    if cur == "solar" and soc < thr - c["hyst_down"]:
+        want = "night"
+    elif cur == "night" and soc >= thr + c["hyst_up"]:
+        want = "solar"
+    if want == "night":
+        return want, "бережу батарею: %d%% < порогу %d%%, сонце до вечора ще дасть ~%.1f кВт·год" % (soc, thr, back)
+    return want, "сонце + батарея: %d%% ≥ порогу %d%%, сонце до вечора ще дасть ~%.1f кВт·год" % (soc, thr, back)
 
 
-def _mode_detail(mode):
-    c = MODE_CFG
-    if mode == "solar":
-        return ("SUB — заряд опустився до %d%%, на батарею повернеться з %d%%" % (c["floor"], c["resume"])
-                if MS["latched"] else "SBU — сонце, нестача з батареї · заряд тільки від сонця")
-    if mode == "night":
-        return ("SUB — дозаряд з мережі %d A до %d%%" % (c["night_charge_a"], c["night_reserve"])
-                if MS["topup"] else "SUB — квартира з мережі, батарея чекає як ДБЖ")
-    if mode == "blackout":
-        return "SUB — сонце + мережа, заряд %d A" % c["blackout_charge_a"]
-    return ""
+def _detail(mode):
+    if mode == "auto":
+        sub = MS.get("auto_sub") or "solar"
+        return "%s · %s" % (MODES[sub]["name"], MS.get("auto_why", ""))
+    return {"solar": "SBU · заряд тільки від сонця",
+            "night": "SUB · батарея чекає як ДБЖ · заряд тільки від сонця",
+            "blackout": "SUB · заряд від сонця й мережі %d A" % MODE_CFG["blackout_charge_a"]}.get(mode, "")
 
 
 def mode_tick(state, state_lock):
     now = time.time()
-    # Сонце ⇄ Ніч follow the sun, switching only on the dusk / dawn edge, so a mode picked
-    # by hand holds until the next edge
     ph = sun_phase(now)
     if ph and ph != MS.get("phase"):
-        prev = MS.get("phase")
-        with _mode_lock:
-            MS["phase"] = ph
-            _mode_save()
-        if prev is not None:
-            if ph == "night" and MS["mode"] == "solar":
-                set_op_mode("night", "захід сонця")
-            elif ph == "day" and MS["mode"] == "night":
-                set_op_mode("solar", "світанок")
+        MS["phase"] = ph
+        _mode_save()
+    if now - LIVE.get("ts", 0) < 90:           # one sample per tick for Авто's forecast / load estimate
+        _hist.append((now, LIVE.get("soc"), LIVE.get("pv_w"), LIVE.get("load_w"),
+                      _pot_at(WX["pot"], now) if WX.get("pot") else None))
     mode, gen = MS["mode"], MS["since"]
     if mode == "custom":
         MS["status"], MS["detail"] = "custom", MS.get("why") or ""
@@ -910,35 +936,48 @@ def mode_tick(state, state_lock):
         if not same_setting(RATED_ALL.get(k), v):
             set_op_mode("custom", "змінено вручну: " + KEY_LABELS.get(k, k))
             return
-    with _mode_lock:
-        want = mode_desired(mode, LIVE.get("soc"))
+    if mode == "auto":
+        sub, why = auto_decide(now, LIVE.get("soc"))
+        if sub != MS.get("auto_sub"):
+            if MS.get("auto_sub") and now - MS.get("auto_since", 0) < MODE_CFG["dwell_s"]:
+                sub = MS["auto_sub"]           # too soon after the last switch — hold
+            else:
+                _mode_event("auto", sub=sub, prev=MS.get("auto_sub"), why=why)
+                MS["auto_sub"], MS["auto_since"] = sub, now
+                _mode_save()
+        MS["auto_why"] = why
+        want = dict(MODES[sub]["set"])
+    else:
+        want = dict(MODES[mode]["set"])
     diffs = [(k, v) for k, v in want.items() if not same_setting(RATED_ALL.get(k), v)]
     for k, v in want.items():
         if (k, v) not in diffs:
             MS["known"][k] = v
     if not diffs:
-        MS["force"] = False
-        MS["status"], MS["detail"] = "ok", _mode_detail(mode)
+        MS["force"], MS["apply"] = False, {}
+        MS["status"], MS["detail"] = "ok", _detail(mode)
         return
     day = time.strftime("%Y-%m-%d")
     if MS["day"] != day:
         MS["day"], MS["writes"] = day, 0
-    waiting = False
+    if MS["writes"] + len(diffs) > MODE_CFG["daily_cap"]:
+        MS["status"], MS["detail"] = "limit", "денний ліміт записів (%d) — до завтра нічого не пишу" % MODE_CFG["daily_cap"]
+        return
+    # queue every changed field at once: the poll loop sends them back-to-back in one cycle
+    batch, waiting = [], False
     for k, v in diffs:
-        if MS["since"] != gen:                   # the mode was switched meanwhile — next tick takes over
-            return
-        if MS["writes"] >= MODE_CFG["daily_cap"]:
-            MS["status"], MS["detail"] = "limit", "денний ліміт записів (%d) — до завтра нічого не пишу" % MODE_CFG["daily_cap"]
-            _mode_save()
-            return
         if not MS["force"] and now - MS["last_write"].get(k, 0) < MODE_CFG["min_gap_s"]:
             waiting = True
             continue
         built = build_set_cmd(k, v)
-        if built is None:
-            continue
-        old = RATED_ALL.get(k)
-        box = queue_cmd(built[1], ttl=40)
+        if built is not None:
+            batch.append((k, v, RATED_ALL.get(k)) + enqueue_cmd(built[1], ttl=60))
+    MS["apply"] = {"total": len(batch), "done": 0, "ok": 0}
+    MS["status"], MS["detail"] = "applying", _detail(mode)
+    for k, v, old, ev, box in batch:
+        ev.wait(timeout=65)
+        if MS["since"] != gen:                  # the mode was switched meanwhile — its own tick takes over
+            return
         MS["writes"] += 1
         MS["last_write"][k] = time.time()
         ok = bool(box.get("ok")) and same_setting(RATED_ALL.get(k), v)
@@ -946,12 +985,13 @@ def mode_tick(state, state_lock):
             MS["known"][k] = v
         else:
             waiting = True
+        MS["apply"]["done"] += 1
+        MS["apply"]["ok"] += int(ok)
         _mode_event("write", mode=mode, key=k, old=old, new=v, ok=ok, reply=box.get("reply", ""))
-    if MS["since"] == gen:
-        MS["force"] = False
-        MS["status"], MS["detail"] = ("pending", "застосовується… " + _mode_detail(mode)) if waiting \
-            else ("ok", _mode_detail(mode))
-        _mode_save()
+    MS["force"] = False
+    MS["status"], MS["detail"] = ("pending", "не все застосувалось — повторю за кілька хвилин · " + _detail(mode)) \
+        if waiting else ("ok", _detail(mode))
+    _mode_save()
 
 
 def mode_loop(state, state_lock):
@@ -968,9 +1008,11 @@ def mode_json():
     m = MS.get("mode", "custom")
     return {"mode": m, "name": MODES[m]["name"], "since": MS.get("since"), "why": MS.get("why", ""),
             "status": MS.get("status") or ("custom" if m == "custom" else "waiting"),
-            "detail": MS.get("detail", ""), "phase": MS.get("phase"), "keys": list(MODES[m]["keys"]),
+            "detail": MS.get("detail", ""), "phase": MS.get("phase"), "apply": MS.get("apply") or {},
+            "auto_sub": MS.get("auto_sub") if m == "auto" else None, "auto_floor": MS.get("auto_floor"),
+            "keys": list(MODES[m]["keys"]), "labels": KEY_LABELS,
             "modes": [{"id": k, "name": v["name"], "desc": v["desc"]} for k, v in MODES.items()],
-            "labels": KEY_LABELS, "cfg": MODE_CFG, "log": _mode_events[-25:]}
+            "cfg": MODE_CFG, "log": _mode_events[-25:]}
 
 # QPIGS "device status" byte (b7..b0), left-to-right in the 8-char string.
 QPIGS_STATUS_BITS = {  # topic_name: string index
@@ -1184,7 +1226,9 @@ def publish_qpigs(mc, topic, text):
             mc.publish(topic + "status/" + name, "1" if status2[idx] == "1" else "0", retain=True)
     mc.publish(topic + "qpigs_json", json.dumps(data), retain=True)
     if isinstance(data.get("battery_capacity"), (int, float)):
-        LIVE.update(ts=time.time(), soc=data["battery_capacity"])   # what the mode controller acts on
+        LIVE.update(ts=time.time(), soc=data["battery_capacity"],        # what the mode controller acts on
+                    pv_w=float(data.get("pv_input_voltage", 0) or 0) * float(data.get("pv_input_current", 0) or 0),
+                    load_w=float(data.get("ac_output_active_power", 0) or 0))
 
     # energy accounting: integrate the per-source power into Wh counters
     try:

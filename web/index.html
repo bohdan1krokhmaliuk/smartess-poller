@@ -85,7 +85,11 @@ body.kiosk header{display:none}
 .opseg button:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .opseg button.on{background:var(--accent); color:#fff}
 .opseg button:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+.opseg button.sub{box-shadow:inset 0 -3px 0 var(--accent)}
 .opst{color:var(--muted)} .opst.ok{color:var(--good)} .opst.warn{color:var(--warn)}
+.opprog{display:inline-block; width:72px; height:6px; margin-left:.45rem; border-radius:3px; background:var(--grid); overflow:hidden; vertical-align:middle}
+.opprog i{display:block; height:100%; background:var(--accent); transition:width .3s}
+@media (prefers-reduced-motion: reduce){ .opprog i{transition:none} }
 main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .section{margin:1.1rem 0 .5rem; font-size:.82rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; cursor:pointer; user-select:none; display:flex; align-items:center; gap:.4rem}
 .section .caret{transition:transform .15s; font-size:.7rem} .section.collapsed .caret{transform:rotate(-90deg)}
@@ -869,20 +873,26 @@ function renderFaults(w){ const fb=document.getElementById("faultbar"),active=(w
   fb.innerHTML=`<b>⚠ Активні аварії — ${level==="fault"?"КРИТИЧНО":"попередження"}:</b> ${chips}`;
 }
 
-// operating mode (☀ Сонце / 🌙 Ніч / 🛡 Блекаут / ✋ Custom) — applied on the Pi by the poller's mode controller
-let OPM=null; const escH=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// operating mode (🤖 Авто / ☀ Сонце / 🌙 Ніч / 🛡 Блекаут / ✋ Custom) — applied on the Pi by the poller's mode controller
+let OPM=null, OPT=0; const escH=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function opPoll(ms){ clearTimeout(OPT); OPT=setTimeout(loadOpMode,ms); }
 function renderOpMode(j){ const bar=document.getElementById("opbar"); if(!bar||!j||!j.modes)return; OPM=j;
-  const st={ok:["✓ ","ok"],pending:["⏳ ",""],waiting:["⏳ ","warn"],limit:["⚠ ","warn"],custom:["✋ ",""]}[j.status]||["",""];
+  const st={ok:["✓ ","ok"],applying:["⏳ ",""],pending:["⏳ ",""],waiting:["⏳ ","warn"],limit:["⚠ ","warn"],custom:["✋ ",""]}[j.status]||["",""];
+  const ap=j.apply||{}, busy=j.status==="applying"&&ap.total>0;   // PI30 has no batch write: fields go one by one, back-to-back
+  const msg=busy?`налаштовую ${ap.done} з ${ap.total}<span class="opprog" aria-hidden="true"><i style="width:${Math.round(100*ap.done/ap.total)}%"></i></span>`
+               :escH(j.detail||(j.status==="custom"?"керуєш сам":""));
   bar.innerHTML=`<span class="lbl">Режим</span><span class="opseg" role="group" aria-label="Режим роботи">`+
-    j.modes.map(m=>`<button type="button" data-op="${m.id}" class="${m.id===j.mode?"on":""}" aria-pressed="${m.id===j.mode}" title="${escH(m.desc)}">${escH(m.name)}</button>`).join("")+
-    `</span><span class="opst ${st[1]}" role="status">${st[0]}${escH(j.detail||(j.status==="custom"?"керуєш сам":""))}</span>`;
-  bar.querySelectorAll("button[data-op]").forEach(b=>b.addEventListener("click",()=>pickOpMode(b.dataset.op))); }
+    j.modes.map(m=>{ const on=m.id===j.mode, sub=m.id===j.auto_sub;
+      return `<button type="button" data-op="${m.id}" class="${on?"on":""}${sub?" sub":""}" aria-pressed="${on}" title="${escH(m.desc)}${sub?" — зараз його тримає Авто":""}">${escH(m.name)}</button>`; }).join("")+
+    `</span><span class="opst ${st[1]}" role="status">${st[0]}${msg}</span>`;
+  bar.querySelectorAll("button[data-op]").forEach(b=>b.addEventListener("click",()=>pickOpMode(b.dataset.op)));
+  if(busy) opPoll(1500); }
 async function loadOpMode(){ try{ renderOpMode(await (await fetch("/mode")).json()); }catch(e){} }
 async function pickOpMode(id){ const m=(OPM&&OPM.modes||[]).find(x=>x.id===id); if(!m)return;
   const q=OPM.mode===id?`Повторно застосувати «${m.name}»?`:`Увімкнути режим «${m.name}»?`;
   if(!confirm(q+"\n\n"+m.desc)) return;
   try{ const r=await fetch("/mode",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:id})}); renderOpMode(await r.json()); }catch(e){}
-  setTimeout(loadOpMode,4000); setTimeout(loadOpMode,20000); }
+  opPoll(1200); }
 async function loadMode(){ try{ const j=await (await fetch("/control")).json(); setBadge(j.mode); }catch(e){} }
 function setBadge(m){ const b=document.getElementById("modeBadge"); b.className="badge "+(m||"unknown"); b.textContent=(m||"?").toUpperCase(); }
 document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",async()=>{ const m=btn.dataset.mode; if(!confirm("Switch to "+m.toUpperCase()+"?\nThe dongle reconnect can take up to ~2 min."))return; try{ const j=await (await fetch("/control/"+m)).json(); setBadge(j.mode); }catch(e){} }));

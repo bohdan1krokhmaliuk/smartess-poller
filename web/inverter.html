@@ -260,7 +260,7 @@ async function load(){
   document.getElementById("ident").innerHTML =
     `<b>${esc(info.model||"—")}</b> · SN ${esc(info.serial||"—")} · ${esc(info.protocol||"")} `+
     `· прошивка ${esc(info.firmware||"—")} · зв'язок <b>${esc(MODE||"—")}</b>`+
-    (OPMODE.name?` · режим роботи <b>${esc(OPMODE.name)}</b>`+(owned(OPMODE.keys&&OPMODE.keys[0])?` <span style="color:var(--muted)">(поля з позначкою «режим» веде він)</span>`:""):"")+
+    (OPMODE.name?` · режим роботи <b>${esc(OPMODE.name)}</b>`+(OPMODE.auto_sub?` → ${esc(((OPMODE.modes||[]).find(m=>m.id===OPMODE.auto_sub)||{}).name||"")}`:"")+(owned(OPMODE.keys&&OPMODE.keys[0])?` <span style="color:var(--muted)">(поля з позначкою «режим» веде він)</span>`:""):"")+
     (MODE&&MODE!=="local"?" <span style='color:var(--warn)'>(зміни вимкнено — потрібен local)</span>":"")+
     (has?"":" · <span style='color:var(--warn)'>уставки ще не зчитані (потрібен local-режим)</span>");
   render(DATA); renderHist(hist);
