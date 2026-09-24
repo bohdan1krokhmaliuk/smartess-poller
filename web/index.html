@@ -77,6 +77,15 @@ body.kiosk header{display:none}
 .badge.local{background:var(--accent)} .badge.mirror{background:var(--good)} .badge.unknown{background:var(--muted)}
 .modebtn{appearance:none;border:1px solid var(--border);background:var(--panel);color:var(--text); padding:.28rem .5rem;border-radius:.5rem;font-size:.76rem;font-weight:600;cursor:pointer}
 .modebtn:hover{border-color:var(--accent)}
+.opbar{display:flex; flex-wrap:wrap; align-items:center; gap:.4rem .6rem; margin:.55rem clamp(.6rem,2vw,1.2rem) 0; font-size:.8rem}
+.opbar .lbl{font-weight:700; color:var(--muted); font-size:.7rem; text-transform:uppercase; letter-spacing:.06em}
+.opseg{display:inline-flex; flex-wrap:wrap; border:1px solid var(--border); border-radius:.55rem; overflow:hidden; background:var(--panel)}
+.opseg button{appearance:none; border:0; border-right:1px solid var(--border); background:transparent; color:var(--text); padding:.34rem .62rem; font:inherit; font-weight:600; cursor:pointer}
+.opseg button:last-child{border-right:0}
+.opseg button:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.opseg button.on{background:var(--accent); color:#fff}
+.opseg button:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+.opst{color:var(--muted)} .opst.ok{color:var(--good)} .opst.warn{color:var(--warn)}
 main{padding:clamp(.6rem,2vw,1.1rem); max-width:1600px; margin:0 auto}
 .section{margin:1.1rem 0 .5rem; font-size:.82rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; cursor:pointer; user-select:none; display:flex; align-items:center; gap:.4rem}
 .section .caret{transition:transform .15s; font-size:.7rem} .section.collapsed .caret{transform:rotate(-90deg)}
@@ -149,6 +158,7 @@ body{padding-bottom:96px}
   <button class="iconbtn" id="themeBtn" title="Toggle theme">🌙</button>
 </header>
 <div id="faultbar" style="display:none;margin:.5rem clamp(.6rem,2vw,1.2rem) 0;font-size:.82rem"></div>
+<div id="opbar" class="opbar"></div>
 <main id="main"></main>
 <div id="timebar">
   <div id="tbCtrls">
@@ -843,7 +853,7 @@ async function refresh(){ rotateAbort(); const now=Date.now(),{from,to}=range(),
   }));
   try{ const age=await qInstant("time() - timestamp(inverter_battery_voltage)",Date.now()); document.getElementById("freshDot").className="dot"+((age==null||age>120)?" stale":""); }catch(e){}
   { try{ const w=await fetch("/warnings").then(r=>r.json()); renderFaults(w); }catch(e){} }
-  loadMode();
+  loadMode(); loadOpMode();
 }
 
 // --- inverter warnings/faults: current state (coloured by severity) + collapsible history ---
@@ -859,6 +869,20 @@ function renderFaults(w){ const fb=document.getElementById("faultbar"),active=(w
   fb.innerHTML=`<b>⚠ Активні аварії — ${level==="fault"?"КРИТИЧНО":"попередження"}:</b> ${chips}`;
 }
 
+// operating mode (☀ Сонце / 🌙 Ніч / 🛡 Блекаут / ✋ Custom) — applied on the Pi by the poller's mode controller
+let OPM=null; const escH=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function renderOpMode(j){ const bar=document.getElementById("opbar"); if(!bar||!j||!j.modes)return; OPM=j;
+  const st={ok:["✓ ","ok"],pending:["⏳ ",""],waiting:["⏳ ","warn"],limit:["⚠ ","warn"],custom:["✋ ",""]}[j.status]||["",""];
+  bar.innerHTML=`<span class="lbl">Режим</span><span class="opseg" role="group" aria-label="Режим роботи">`+
+    j.modes.map(m=>`<button type="button" data-op="${m.id}" class="${m.id===j.mode?"on":""}" aria-pressed="${m.id===j.mode}" title="${escH(m.desc)}">${escH(m.name)}</button>`).join("")+
+    `</span><span class="opst ${st[1]}" role="status">${st[0]}${escH(j.detail||(j.status==="custom"?"керуєш сам":""))}</span>`;
+  bar.querySelectorAll("button[data-op]").forEach(b=>b.addEventListener("click",()=>pickOpMode(b.dataset.op))); }
+async function loadOpMode(){ try{ renderOpMode(await (await fetch("/mode")).json()); }catch(e){} }
+async function pickOpMode(id){ const m=(OPM&&OPM.modes||[]).find(x=>x.id===id); if(!m)return;
+  const q=OPM.mode===id?`Повторно застосувати «${m.name}»?`:`Увімкнути режим «${m.name}»?`;
+  if(!confirm(q+"\n\n"+m.desc)) return;
+  try{ const r=await fetch("/mode",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:id})}); renderOpMode(await r.json()); }catch(e){}
+  setTimeout(loadOpMode,4000); setTimeout(loadOpMode,20000); }
 async function loadMode(){ try{ const j=await (await fetch("/control")).json(); setBadge(j.mode); }catch(e){} }
 function setBadge(m){ const b=document.getElementById("modeBadge"); b.className="badge "+(m||"unknown"); b.textContent=(m||"?").toUpperCase(); }
 document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",async()=>{ const m=btn.dataset.mode; if(!confirm("Switch to "+m.toUpperCase()+"?\nThe dongle reconnect can take up to ~2 min."))return; try{ const j=await (await fetch("/control/"+m)).json(); setBadge(j.mode); }catch(e){} }));

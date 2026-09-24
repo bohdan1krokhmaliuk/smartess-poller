@@ -136,18 +136,20 @@ def pi30_cmd(cmd):
     return b"\xff\x04" + a + _pi30_crc(a) + b"\x0d"
 
 
-def queue_cmd(cmds):
+def queue_cmd(cmds, ttl=30):
     """Thread-safe: ask the local poll loop to send a PI30 command over RS485 and block
     briefly for the reply. `cmds` is one ASCII command, or a list of alternative formats
     tried in order until one isn't NAK'd (e.g. MUCHGC030 / MUCHGC0030). Returns
     {ok, reply, cmd}. Local mode only (the loop owns the bus). After an ACK the loop
-    re-reads QPIRI+QFLAG, so RATED_ALL already holds the result when this returns."""
+    re-reads QPIRI+QFLAG, so RATED_ALL already holds the result when this returns.
+    A command not sent within `ttl` seconds (inverter off, dongle reconnecting) is
+    dropped instead of firing late."""
     if isinstance(cmds, str):
         cmds = [cmds]
     ev = threading.Event()
-    box = {"ok": None, "reply": "", "cmd": cmds[0]}
+    box = {"ok": None, "reply": "", "cmd": cmds[0], "deadline": time.time() + ttl}
     _cmd_q.put((list(cmds), ev, box))
-    ev.wait(timeout=25)                                 # loop drains once per poll (~10 s)
+    ev.wait(timeout=min(ttl, 25))                       # loop drains once per poll (~10 s)
     return box
 
 # device identity, filled as the static commands come in; served at /info
@@ -493,6 +495,9 @@ def fetch_weather_once(mc, topic):
         out["gti"] = round(gti, 1)
         if kwp > 0:
             out["pv_potential_w"] = round(kwp * out["gti"] * pv_derate(out["gti"], out.get("temp")))
+    if kwp > 0 and epochs:                   # today's forecast PV curve, for the day/night mode switch
+        WX.update(ts=now, pot=[(e, kwp * g * pv_derate(g, out.get("temp")))
+                               for e, g in zip(epochs, gtis) if g is not None])
     # Solcast is stored separately (full curve, real timestamps) by solcast_loop, not here.
     if out:
         mc.publish(topic + "weather_json", json.dumps(out), retain=True)
@@ -695,6 +700,277 @@ def catalog_json():
     for key in FLAG_LETTERS:
         out[key] = {"type": "flag"}
     return out
+
+
+# ------------------------------------------------------------------ operating modes
+# A mode is a desired set of the settings above plus a little logic. mode_loop() applies
+# it: it writes only the fields that differ, only while the inverter is reachable (local
+# mode, fresh data), never fights a manual change (that turns the mode into "custom"), and
+# the chosen mode survives restarts. ☀ Сонце and 🌙 Ніч hand over to each other at dusk
+# and dawn; 🛡 Блекаут and ✋ Custom stay until another mode is picked.
+MODE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mode_state.json")
+MODE_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mode_log.jsonl")
+MODE_CFG = {
+    "floor": 50,              # ☀ at/below this SoC the flat goes to the grid (SUB), keeping a reserve
+    "resume": 80,             # ☀ ...and back to the battery (SBU) once it has recharged to this
+    "night_reserve": 50,      # 🌙 top the battery up from the grid only while it's below this
+    "night_charge_a": 10,     # 🌙 ...slowly (~0.5 kW)
+    "blackout_charge_a": 40,  # 🛡 grid charge current (~2 kW)
+    "dawn_w": 300,            # morning: day starts once the forecast PV potential reaches this
+    "dusk_kwh": 0.3,          # afternoon: night starts once the forecast PV energy left today drops to this
+    "min_gap_s": 300,         # the controller rewrites a field at most this often...
+    "daily_cap": 48,          # ...and makes at most this many writes a day (EEPROM guard)
+}
+_OUT, _CHG, _ACA = "output_source_priority", "charger_source_priority", "max_ac_charging_current"
+OUT_SUB, OUT_SBU = 1, 2
+CHG_SNU, CHG_OSO = 2, 3
+KEY_LABELS = {_OUT: "пріоритет виходу", _CHG: "пріоритет заряду", _ACA: "струм заряду з мережі"}
+MODES = {
+    "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG),
+                 "desc": "Вдень SBU: сонце — в квартиру, нестача — з батареї; мережа лише коли заряд "
+                         "впаде до 50% (і до 80%). Батарея заряджається тільки від сонця. Коли сонце "
+                         "вичерпається, сам перейде в 🌙 Ніч."},
+    "night":    {"name": "🌙 Ніч", "keys": (_OUT, _CHG, _ACA),
+                 "desc": "Квартира з мережі (SUB), батарея не розряджається — чекає як ДБЖ. Від мережі "
+                         "не заряджає; лише якщо заряд нижче 50% — повільно (10 A) дозаряджає до 50%. "
+                         "На світанку сам перейде в ☀️ Сонце."},
+    "blackout": {"name": "🛡️ Блекаут", "keys": (_OUT, _CHG, _ACA),
+                 "desc": "Тримає батарею повною для відключень: квартира з сонця й мережі (SUB), "
+                         "батарея — лише коли зникне мережа; заряд від сонця й мережі, 40 A. "
+                         "Сам нікуди не перемикається."},
+    "custom":   {"name": "✋ Custom", "keys": (),
+                 "desc": "Pi нічого не змінює — керуєш сам (сторінка налаштувань, екран інвертора, SmartESS)."},
+}
+LIVE = {}                  # latest SoC from QPIGS: ts, soc
+WX = {}                    # today's forecast PV potential: ts, pot=[(epoch, W)]
+MS = {}                    # persisted mode state, see _mode_load()
+_mode_lock = threading.Lock()
+_mode_wake = threading.Event()
+_mode_events = []          # in-memory tail of the mode log
+
+
+def _mode_load():
+    try:
+        with open(MODE_FILE) as f:
+            saved = json.load(f)
+    except Exception:
+        saved = {}
+    with _mode_lock:
+        MS.clear()
+        MS.update({"mode": "custom", "since": int(time.time()), "why": "", "phase": None,
+                   "latched": False, "topup": False, "known": {}, "last_write": {},
+                   "day": "", "writes": 0, "force": False, "status": "", "detail": ""})
+        MS.update({k: v for k, v in saved.items() if k in MS})
+        if MS["mode"] not in MODES:
+            MS["mode"] = "custom"
+    try:
+        with open(MODE_LOG_FILE) as f:
+            for ln in f.readlines()[-300:]:
+                try:
+                    _mode_events.append(json.loads(ln))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _mode_save():
+    try:
+        tmp = MODE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(MS, f, ensure_ascii=False)
+        os.replace(tmp, MODE_FILE)
+    except Exception as e:
+        print(time.strftime("%H:%M:%S"), "mode state save failed:", e)
+
+
+def _mode_event(kind, **kw):
+    ev = dict(ts=int(time.time()), kind=kind, **kw)
+    _mode_events.append(ev)
+    del _mode_events[:-300]
+    try:
+        with open(MODE_LOG_FILE, "a") as f:
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    print(time.strftime("%H:%M:%S"), "mode", kind, kw)
+
+
+def set_op_mode(mode, why):
+    """Switch the operating mode: from the UI, a dusk/dawn hand-over, or a manual change."""
+    if mode not in MODES:
+        return False
+    with _mode_lock:
+        prev = MS.get("mode")
+        MS.update(mode=mode, since=int(time.time()), why=why, known={}, latched=False,
+                  topup=False, force=True, status="", detail="")
+        _mode_save()
+    _mode_event("mode", mode=mode, prev=prev, why=why)
+    _mode_wake.set()
+    return True
+
+
+def _pot_at(pot, t):
+    """Forecast PV potential (W) at time t, linearly interpolated; None outside the curve."""
+    for i in range(1, len(pot)):
+        (t0, w0), (t1, w1) = pot[i - 1], pot[i]
+        if t0 <= t <= t1:
+            return w0 + (w1 - w0) * (t - t0) / ((t1 - t0) or 1)
+    return None
+
+
+def sun_phase(now):
+    """'day' / 'night' for the Сонце ⇄ Ніч hand-over, or None to keep the current one. In the
+    morning, day starts once the forecast PV potential reaches dawn_w; in the afternoon, night
+    starts once the forecast PV energy left today drops to dusk_kwh. Without a fresh forecast
+    it falls back to the sun's elevation."""
+    geo = _load_pv_geo()
+    if not geo:
+        return None
+    el, az = _solar_elev_az(geo[0], geo[1], now)
+    morning = az < 180                          # solar midnight .. solar noon
+    pot = WX.get("pot") if now - WX.get("ts", 0) < 3 * 3600 else None
+    if pot:
+        if morning:
+            cur = _pot_at(pot, now)
+            return "day" if (cur is not None and cur >= MODE_CFG["dawn_w"]) or el >= 20 else None
+        left = sum(w for t, w in pot if t >= now) * 0.25 / 1000.0   # 15-min points -> kWh
+        return "night" if left <= MODE_CFG["dusk_kwh"] or el <= 3 else None
+    if morning:
+        return "day" if el >= 12 else None
+    return "night" if el <= 8 else None
+
+
+def mode_desired(mode, soc):
+    """Field values `mode` wants right now; updates the Сонце / Ніч hysteresis state."""
+    c = MODE_CFG
+    if mode == "solar":
+        if soc is not None:
+            if soc <= c["floor"]:
+                MS["latched"] = True
+            elif soc >= c["resume"]:
+                MS["latched"] = False
+        return {_OUT: OUT_SUB if MS["latched"] else OUT_SBU, _CHG: CHG_OSO}
+    if mode == "night":
+        if soc is not None:
+            if soc < c["night_reserve"] - 2:
+                MS["topup"] = True
+            elif soc >= c["night_reserve"]:
+                MS["topup"] = False
+        want = {_OUT: OUT_SUB, _CHG: CHG_SNU if MS["topup"] else CHG_OSO}
+        if MS["topup"]:
+            want[_ACA] = c["night_charge_a"]
+        return want
+    if mode == "blackout":
+        return {_OUT: OUT_SUB, _CHG: CHG_SNU, _ACA: c["blackout_charge_a"]}
+    return {}
+
+
+def _mode_detail(mode):
+    c = MODE_CFG
+    if mode == "solar":
+        return ("SUB — заряд опустився до %d%%, на батарею повернеться з %d%%" % (c["floor"], c["resume"])
+                if MS["latched"] else "SBU — сонце, нестача з батареї · заряд тільки від сонця")
+    if mode == "night":
+        return ("SUB — дозаряд з мережі %d A до %d%%" % (c["night_charge_a"], c["night_reserve"])
+                if MS["topup"] else "SUB — квартира з мережі, батарея чекає як ДБЖ")
+    if mode == "blackout":
+        return "SUB — сонце + мережа, заряд %d A" % c["blackout_charge_a"]
+    return ""
+
+
+def mode_tick(state, state_lock):
+    now = time.time()
+    # Сонце ⇄ Ніч follow the sun, switching only on the dusk / dawn edge, so a mode picked
+    # by hand holds until the next edge
+    ph = sun_phase(now)
+    if ph and ph != MS.get("phase"):
+        prev = MS.get("phase")
+        with _mode_lock:
+            MS["phase"] = ph
+            _mode_save()
+        if prev is not None:
+            if ph == "night" and MS["mode"] == "solar":
+                set_op_mode("night", "захід сонця")
+            elif ph == "day" and MS["mode"] == "night":
+                set_op_mode("solar", "світанок")
+    mode, gen = MS["mode"], MS["since"]
+    if mode == "custom":
+        MS["status"], MS["detail"] = "custom", MS.get("why") or ""
+        return
+    with state_lock:
+        bus = state["mode"]
+    if bus != "local":
+        MS["status"], MS["detail"] = "waiting", "потрібен LOCAL-режим — застосується, щойно увімкнеш"
+        return
+    if now - LIVE.get("ts", 0) > 90 or not RATED_ALL:
+        MS["status"], MS["detail"] = "waiting", "інвертор не на зв'язку — застосується, щойно з'явиться"
+        return
+    for k, v in list(MS["known"].items()):     # changed without us (screen, SmartESS) -> hands off
+        if not same_setting(RATED_ALL.get(k), v):
+            set_op_mode("custom", "змінено вручну: " + KEY_LABELS.get(k, k))
+            return
+    with _mode_lock:
+        want = mode_desired(mode, LIVE.get("soc"))
+    diffs = [(k, v) for k, v in want.items() if not same_setting(RATED_ALL.get(k), v)]
+    for k, v in want.items():
+        if (k, v) not in diffs:
+            MS["known"][k] = v
+    if not diffs:
+        MS["force"] = False
+        MS["status"], MS["detail"] = "ok", _mode_detail(mode)
+        return
+    day = time.strftime("%Y-%m-%d")
+    if MS["day"] != day:
+        MS["day"], MS["writes"] = day, 0
+    waiting = False
+    for k, v in diffs:
+        if MS["since"] != gen:                   # the mode was switched meanwhile — next tick takes over
+            return
+        if MS["writes"] >= MODE_CFG["daily_cap"]:
+            MS["status"], MS["detail"] = "limit", "денний ліміт записів (%d) — до завтра нічого не пишу" % MODE_CFG["daily_cap"]
+            _mode_save()
+            return
+        if not MS["force"] and now - MS["last_write"].get(k, 0) < MODE_CFG["min_gap_s"]:
+            waiting = True
+            continue
+        built = build_set_cmd(k, v)
+        if built is None:
+            continue
+        old = RATED_ALL.get(k)
+        box = queue_cmd(built[1], ttl=40)
+        MS["writes"] += 1
+        MS["last_write"][k] = time.time()
+        ok = bool(box.get("ok")) and same_setting(RATED_ALL.get(k), v)
+        if ok:
+            MS["known"][k] = v
+        else:
+            waiting = True
+        _mode_event("write", mode=mode, key=k, old=old, new=v, ok=ok, reply=box.get("reply", ""))
+    if MS["since"] == gen:
+        MS["force"] = False
+        MS["status"], MS["detail"] = ("pending", "застосовується… " + _mode_detail(mode)) if waiting \
+            else ("ok", _mode_detail(mode))
+        _mode_save()
+
+
+def mode_loop(state, state_lock):
+    while True:
+        _mode_wake.wait(30)
+        _mode_wake.clear()
+        try:
+            mode_tick(state, state_lock)
+        except Exception as e:
+            print(time.strftime("%H:%M:%S"), "mode controller error:", e)
+
+
+def mode_json():
+    m = MS.get("mode", "custom")
+    return {"mode": m, "name": MODES[m]["name"], "since": MS.get("since"), "why": MS.get("why", ""),
+            "status": MS.get("status") or ("custom" if m == "custom" else "waiting"),
+            "detail": MS.get("detail", ""), "phase": MS.get("phase"), "keys": list(MODES[m]["keys"]),
+            "modes": [{"id": k, "name": v["name"], "desc": v["desc"]} for k, v in MODES.items()],
+            "labels": KEY_LABELS, "cfg": MODE_CFG, "log": _mode_events[-25:]}
 
 # QPIGS "device status" byte (b7..b0), left-to-right in the 8-char string.
 QPIGS_STATUS_BITS = {  # topic_name: string index
@@ -907,6 +1183,8 @@ def publish_qpigs(mc, topic, text):
         if len(status2) > idx:
             mc.publish(topic + "status/" + name, "1" if status2[idx] == "1" else "0", retain=True)
     mc.publish(topic + "qpigs_json", json.dumps(data), retain=True)
+    if isinstance(data.get("battery_capacity"), (int, float)):
+        LIVE.update(ts=time.time(), soc=data["battery_capacity"])   # what the mode controller acts on
 
     # energy accounting: integrate the per-source power into Wh counters
     try:
@@ -1118,6 +1396,10 @@ def handle_fakeclient(sock, mc, cfg):
                 _cmds, _ev, _box = _cmd_q.get_nowait()
             except queue.Empty:
                 break
+            if time.time() > _box.get("deadline", float("inf")):   # queued while the inverter was away
+                _box["ok"], _box["reply"] = False, "expired"
+                _ev.set()
+                continue
             try:
                 for _ascii in _cmds:                             # alternative formats, tried in order
                     _rep = voltronic_text(request(sock, reader, pi30_cmd(_ascii)))
@@ -1444,6 +1726,35 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
             except Exception:
                 pass
 
+        def _json_body(self, limit=1024):
+            """Read a same-origin JSON object body, or reply with an error and return None.
+            JSON-only + same-origin, so a site open in your browser can't trigger a write
+            (a cross-site JSON POST needs a CORS preflight, which this server never grants)."""
+            try:
+                n = int(self.headers.get("Content-Length", 0) or 0)
+            except ValueError:
+                n = -1
+            if n <= 0 or n > limit:
+                self.close_connection = True        # never leave an unread body on a keep-alive socket
+                self._reply(400, "application/json", json.dumps({"ok": False, "error": "bad length"}))
+                return None
+            body = self.rfile.read(n)
+            org = (self.headers.get("Origin") or "").split("://", 1)[-1].rstrip("/")
+            if org and org != (self.headers.get("Host") or ""):
+                self._reply(403, "application/json", json.dumps({"ok": False, "error": "cross-origin write refused"}))
+                return None
+            if "application/json" not in (self.headers.get("Content-Type") or ""):
+                self._reply(415, "application/json", json.dumps({"ok": False, "error": "JSON body required"}))
+                return None
+            try:
+                obj = json.loads(body.decode("utf-8"))
+            except Exception:
+                obj = None
+            if not isinstance(obj, dict):
+                self._reply(400, "application/json", json.dumps({"ok": False, "error": "bad JSON"}))
+                return None
+            return obj
+
         def do_GET(self):
             raw = self.path
             path = raw.split("?", 1)[0]
@@ -1501,6 +1812,10 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                         except Exception:
                             out[k] = None
                 self._reply(200, "application/json", json.dumps(out))
+                return
+
+            if path == "/mode":                        # operating mode + status + recent log
+                self._reply(200, "application/json", json.dumps(mode_json(), ensure_ascii=False))
                 return
 
             if path == "/rated":                       # full QPIRI snapshot (read-only)
@@ -1617,30 +1932,10 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                 return
 
             if path == "/set":                          # write ONE setting: JSON {"key": ..., "value": ...}
-                try:
-                    n = int(self.headers.get("Content-Length", 0) or 0)
-                except ValueError:
-                    n = -1
-                if n <= 0 or n > 1024:
-                    self.close_connection = True        # never leave an unread body on a keep-alive socket
-                    self._reply(400, "application/json", json.dumps({"ok": False, "error": "bad length"}))
+                req = self._json_body()
+                if req is None:
                     return
-                body = self.rfile.read(n)
-                # JSON-only + same-origin, so a site open in your browser can't trigger a write
-                # (a cross-site JSON POST needs a CORS preflight, which this server never grants)
-                org = (self.headers.get("Origin") or "").split("://", 1)[-1].rstrip("/")
-                if org and org != (self.headers.get("Host") or ""):
-                    self._reply(403, "application/json", json.dumps({"ok": False, "error": "cross-origin write refused"}))
-                    return
-                if "application/json" not in (self.headers.get("Content-Type") or ""):
-                    self._reply(415, "application/json", json.dumps({"ok": False, "error": "JSON body required"}))
-                    return
-                try:
-                    req = json.loads(body.decode("utf-8"))
-                    key, value = str(req.get("key", "")), req.get("value")
-                except Exception:
-                    self._reply(400, "application/json", json.dumps({"ok": False, "error": "bad JSON"}))
-                    return
+                key, value = str(req.get("key", "")), req.get("value")
                 built = build_set_cmd(key, value)
                 if built is None:
                     self._reply(400, "application/json", json.dumps(
@@ -1661,10 +1956,23 @@ def start_control_server(port, state, state_lock, set_mode, mc=None, topic=""):
                     return
                 box = queue_cmd(cmds)
                 new = RATED_ALL.get(key)               # already re-read from the inverter after an ACK
+                if box["ok"] and key in MODES[MS.get("mode", "custom")]["keys"]:
+                    set_op_mode("custom", "змінено на сторінці налаштувань: " + KEY_LABELS.get(key, key))   # a hand edit wins
                 self._reply(200, "application/json", json.dumps(
                     {"ok": bool(box["ok"]), "changed": bool(box["ok"]), "verified": same_setting(new, want),
                      "reply": box.get("reply", ""), "cmd": box.get("cmd"), "key": key, "old": old,
                      "value": new, "value_name": RATED_ALL.get(key + "_name")}))
+                return
+
+            if path == "/mode":                         # pick the operating mode: JSON {"mode": "solar"|...}
+                req = self._json_body()
+                if req is None:
+                    return
+                mode = str(req.get("mode", ""))
+                if not set_op_mode(mode, "обрано на дашборді"):
+                    self._reply(400, "application/json", json.dumps({"ok": False, "error": "unknown mode", "mode": mode}))
+                    return
+                self._reply(200, "application/json", json.dumps(dict(mode_json(), ok=True), ensure_ascii=False))
                 return
 
             if path == "/vmq":                          # batched VM queries → run concurrently, return aligned results
@@ -1745,6 +2053,8 @@ def main():
         start_control_server(cfg["control_port"], state, state_lock, set_mode, mc, topic)
 
     _load_rated_state()          # so a restart alone doesn't re-log unchanged settings
+    _mode_load()                 # resume the operating mode picked before the restart
+    threading.Thread(target=mode_loop, args=(state, state_lock), daemon=True).start()
     threading.Thread(target=weather_loop, args=(mc, topic), daemon=True).start()
     threading.Thread(target=solcast_loop, daemon=True).start()
     threading.Thread(target=cams_loop, daemon=True).start()

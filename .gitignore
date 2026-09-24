@@ -18,6 +18,9 @@ captures/
 .warnings_history.jsonl
 .cams_backfill
 .solcast_backfill
+.mode_state.json
+.mode_state.json.tmp
+.mode_log.jsonl
 
 # python
 __pycache__/

@@ -56,6 +56,7 @@ td.desc{color:var(--muted); line-height:1.45}
 .tag{display:inline-block; font-size:.66rem; font-weight:700; padding:1px 6px; border-radius:8px; margin-left:.4rem;
   background:color-mix(in srgb,var(--good) 18%,transparent); color:var(--good); vertical-align:middle}
 .tag.man{background:color-mix(in srgb,var(--warn) 20%,transparent); color:var(--warn)}
+.tag.op{background:color-mix(in srgb,var(--accent) 18%,transparent); color:var(--accent)}
 .ro th.h-prog,.ro th.h-opts,.ro td.prog,.ro td.opts{display:none}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--good);display:inline-block}
 .dot.stale{background:var(--warn)}
@@ -187,7 +188,8 @@ const CAT = [
 
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ROW={}; for(const c of CAT) for(const r of c.rows) ROW[r.k]=r;   // key -> row: label, unit, option labels
-let CATALOG={}, MODE=null, DATA={}, LAST={};   // LAST = result of the latest write, kept across the re-render
+let CATALOG={}, MODE=null, DATA={}, LAST={}, OPMODE={};   // LAST = result of the latest write, kept across the re-render
+const owned=k=>OPMODE.mode&&OPMODE.mode!=="custom"&&(OPMODE.keys||[]).includes(k);   // field the active operating mode sets
 const eq=(a,b)=>a!=null&&b!=null&&a!==""&&b!==""&&Math.abs(Number(a)-Number(b))<1e-6;
 function valText(k,v){ const r=ROW[k]||{};
   if(v===undefined||v===null||v==="") return "—";
@@ -206,7 +208,7 @@ function editor(r){ const spec=CATALOG[r.k]; if(!spec||spec.type==="flag") retur
     `<button type="button" disabled>Змінити</button><span class="st ${st.cls||""}" role="status">${esc(st.text||"")}</span></div>`; }
 async function apply(k,v,el){
   const r=ROW[k], st=el.querySelector(".st"), btn=el.querySelector("button"), sel=el.querySelector("select");
-  if(!confirm(`Змінити «${r.label}»\n${valText(k,DATA[k])} → ${valText(k,v)}?\n\nКоманда піде в інвертор і запишеться в його пам'ять.`)){
+  if(!confirm(`Змінити «${r.label}»\n${valText(k,DATA[k])} → ${valText(k,v)}?\n\n`+(owned(k)?`Це поле зараз веде режим «${OPMODE.name}» — після зміни режим перейде в ✋ Custom.\n\n`:"")+`Команда піде в інвертор і запишеться в його пам'ять.`)){
     sel.value=String(DATA[k]??""); btn.disabled=true; return; }
   btn.disabled=true; sel.disabled=true; st.className="st"; st.textContent="⏳ надсилаю в інвертор…";
   let j; try{ const res=await fetch("/set",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:k,value:v})}); j=await res.json(); }
@@ -222,7 +224,7 @@ function render(d){
     const sec=document.createElement("div"); sec.className="section"; sec.textContent=c.name; host.append(sec);
     const card=document.createElement("div"); card.className="card"+(c.ro?" ro":"");
     const rows=c.rows.map(r=>`<tr>
-      <td class="param">${esc(r.label)}${r.tag?`<span class="tag${r.tag==="BMS"?" man":""}">${esc(r.tag)}</span>`:""}</td>
+      <td class="param">${esc(r.label)}${r.tag?`<span class="tag${r.tag==="BMS"?" man":""}">${esc(r.tag)}</span>`:""}${owned(r.k)?`<span class="tag op" title="Це поле зараз веде режим ${esc(OPMODE.name)}">режим</span>`:""}</td>
       <td class="now">${esc(valText(r.k,d[r.k]))}${editor(r)}</td>
       <td class="prog">${r.prog?esc(r.prog):"—"}</td>
       <td class="opts">${r.opts?esc(r.opts):"—"}</td>
@@ -248,16 +250,17 @@ function renderHist(ev){ const host=document.getElementById("hist"), items=[];
     if(items.length>=25) break; }
   host.innerHTML=`<ul class="hist">${items.length?items.join(""):'<li class="empty">Змін ще не було.</li>'}</ul>`; }
 async function load(){
-  let info={}, rated={}, cat={}, ctl={}, hist=[];
+  let info={}, rated={}, cat={}, ctl={}, hist=[], opm={};
   const get=(u,f)=>fetch(u).then(r=>r.json()).then(f).catch(()=>{});
   await Promise.all([get("/info",j=>info=j), get("/rated",j=>rated=j), get("/settings/catalog",j=>cat=j),
-                     get("/control",j=>ctl=j), get("/rated/history",j=>hist=j)]);
-  DATA=rated||{}; CATALOG=cat||{}; MODE=(ctl&&ctl.mode)||null;
+                     get("/control",j=>ctl=j), get("/rated/history",j=>hist=j), get("/mode",j=>opm=j)]);
+  DATA=rated||{}; CATALOG=cat||{}; MODE=(ctl&&ctl.mode)||null; OPMODE=opm||{};
   const has=Object.keys(DATA).length;
   document.getElementById("fresh").className="dot"+(has?"":" stale");
   document.getElementById("ident").innerHTML =
     `<b>${esc(info.model||"—")}</b> · SN ${esc(info.serial||"—")} · ${esc(info.protocol||"")} `+
-    `· прошивка ${esc(info.firmware||"—")} · режим <b>${esc(MODE||"—")}</b>`+
+    `· прошивка ${esc(info.firmware||"—")} · зв'язок <b>${esc(MODE||"—")}</b>`+
+    (OPMODE.name?` · режим роботи <b>${esc(OPMODE.name)}</b>`+(owned(OPMODE.keys&&OPMODE.keys[0])?` <span style="color:var(--muted)">(поля з позначкою «режим» веде він)</span>`:""):"")+
     (MODE&&MODE!=="local"?" <span style='color:var(--warn)'>(зміни вимкнено — потрібен local)</span>":"")+
     (has?"":" · <span style='color:var(--warn)'>уставки ще не зчитані (потрібен local-режим)</span>");
   render(DATA); renderHist(hist);
