@@ -227,19 +227,26 @@ def pv_derate(gti, t_air):
     return max(0.5, min(1.05, PV_BASE_DERATE * (1.0 - PV_TEMP_COEFF * (t_cell - 25.0))))
 
 
-# --- self-computed irradiance ("own" source): clear-sky geometry × cloud transmission ---
-# Free and computable every cycle from just cloud_cover + temperature — no external irradiance product.
-# The point: bypass Open-Meteo's interpolated GTI (which misses convective clouds for our region) and instead
-# build GTI ourselves from sun geometry, attenuated by cloud_cover via Kasten-Czeplak. Same math as the
-# dashboard's clear-sky fallback + cloudFactor.
+# --- sun position: CAMS transposition and 🤖 Авто's sunrise/sunset ---
+# NOAA's solar calculator equations (after Meeus): sunrise/sunset to about a minute
+# (the short textbook formula was ~4 min off around the equinoxes).
 def _solar_elev_az(lat, lon, ts):
     r = math.pi / 180.0
-    d = time.gmtime(ts)
-    N = d.tm_yday
-    dec = 23.45 * math.sin(r * 360 * (284 + N) / 365)
-    B = r * 360 * (N - 81) / 364
-    eot = 9.87 * math.sin(2 * B) - 7.53 * math.cos(B) - 1.5 * math.sin(B)
-    utc_h = d.tm_hour + d.tm_min / 60.0 + d.tm_sec / 3600.0
+    T = (ts / 86400.0 - 10957.5) / 36525.0                            # Julian centuries since J2000.0
+    L0 = (280.46646 + T * (36000.76983 + 0.0003032 * T)) % 360        # mean longitude
+    M = 357.52911 + T * (35999.05029 - 0.0001537 * T)                 # mean anomaly
+    e = 0.016708634 - T * (0.000042037 + 0.0000001267 * T)
+    C = (math.sin(M * r) * (1.914602 - T * (0.004817 + 0.000014 * T))
+         + math.sin(2 * M * r) * (0.019993 - 0.000101 * T) + math.sin(3 * M * r) * 0.000289)
+    om = 125.04 - 1934.136 * T
+    lam = L0 + C - 0.00569 - 0.00478 * math.sin(om * r)               # apparent longitude
+    eps = 23 + (26 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813))) / 60) / 60 + 0.00256 * math.cos(om * r)
+    dec = math.degrees(math.asin(math.sin(eps * r) * math.sin(lam * r)))
+    y = math.tan(eps * r / 2) ** 2
+    eot = 4 * math.degrees(y * math.sin(2 * L0 * r) - 2 * e * math.sin(M * r)
+                           + 4 * e * y * math.sin(M * r) * math.cos(2 * L0 * r)
+                           - 0.5 * y * y * math.sin(4 * L0 * r) - 1.25 * e * e * math.sin(2 * M * r))   # minutes
+    utc_h = (ts % 86400) / 3600.0
     solar_t = utc_h + lon / 15.0 + eot / 60.0
     H = 15.0 * (solar_t - 12.0)
     sin_el = math.sin(lat * r) * math.sin(dec * r) + math.cos(lat * r) * math.cos(dec * r) * math.cos(H * r)
@@ -707,9 +714,9 @@ def catalog_json():
 
 # ------------------------------------------------------------------ operating modes
 # A mode is a STATIC set of the settings above: while it's selected, those values hold.
-# 🤖 Авто is the only one with logic: 🌙 Ніч when there's no sun, and by day ☀ Сонце while
-# the battery is above a band (auto_decide). No forecast, and no passing cloud can switch
-# anything: sun / no sun flips once each way per day (sun_update). mode_loop() applies the
+# 🤖 Авто is the only one with logic: 🌙 Ніч from sunset to sunrise, and by day ☀ Сонце while
+# the battery is above a band (auto_decide). No forecast and no panel readings, so no passing
+# cloud can switch anything: day is the sun above the horizon (sun_update). mode_loop() applies the
 # chosen set: only the fields that differ, only while the inverter is reachable (LOCAL,
 # fresh data), all queued in one go with an "n of m" progress count. Editing a mode field
 # by hand switches to ✋ Custom; the choice survives restarts.
@@ -718,13 +725,10 @@ MODE_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mode_
 MODE_CFG = {
     "band_low": 70,           # 🤖 by day the battery carries the flat while SoC ≥ this...
     "band_high": 80,          # 🤖 ...below it the grid does, until the sun has recharged it to this
-    "dwell_s": 1800,          # 🤖 at least 30 min between Сонце ⇄ Ніч switches
-    "pv_on_w": 300,           # sun: morning turns to day once the panels give this...
-    "sun_on_s": 900,          # ...for 15 min straight (or the sun is dawn_elev° up)
-    "dawn_elev": 15,
-    "pv_off_w": 150,          # evening turns to night once they give less than this...
-    "sun_off_s": 1200,        # ...for 20 min straight while the sun is below dusk_elev° (or it has set)
-    "dusk_elev": 10,
+    "dwell_s": 1800,          # 🤖 back to the battery no sooner than 30 min after the last switch
+    "horizon_elev": -0.83,    # 🤖 day = the sun above this: sunrise -> sunset as in the weather forecast.
+                              #    Waiting for the panels (SW-facing, weak in the morning) left the
+                              #    flat on the grid ~1.1 kWh/day with the battery full (backtest)
     "blackout_charge_a": 40,  # 🛡 grid charge current (~2 kW)
     "min_gap_s": 300,         # the controller rewrites a field at most this often...
     "daily_cap": 48,          # ...and makes at most this many writes a day (EEPROM guard)
@@ -735,9 +739,9 @@ CHG_SNU, CHG_OSO = 2, 3
 KEY_LABELS = {_OUT: "пріоритет виходу", _CHG: "пріоритет заряду", _ACA: "струм заряду з мережі"}
 MODES = {
     "auto":     {"name": "🤖 Авто", "keys": (_OUT, _CHG), "set": None,
-                 "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за сонцем: зранку — коли панелі стабільно дають "
-                         "енергію, увечері — коли сонце низько й панелі згасли (раз на добу, хмарки нічого не "
-                         "перемикають). Вдень батарея живить квартиру, поки заряд ≥ 70%; нижче — мережа, а "
+                 "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за сонцем: від сходу до заходу — ☀️, після заходу — "
+                         "🌙, квартира тільки з мережі (схід і захід Pi рахує щодня за координатами; хмарки нічого "
+                         "не перемикають). Вдень батарея живить квартиру, поки заряд ≥ 70%; нижче — мережа, а "
                          "сонце дозаряджає до 80%, і знову батарея."},
     "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG), "set": {_OUT: OUT_SBU, _CHG: CHG_OSO},
                  "desc": "SBU: сонце — в квартиру, нестача — з батареї, мережа лише коли батарея сіла. "
@@ -770,7 +774,6 @@ def _mode_load():
         MS.update({"mode": "custom", "since": int(time.time()), "why": "", "phase": None,
                    "known": {}, "last_write": {}, "day": "", "writes": 0, "force": False,
                    "auto_sub": None, "auto_since": 0, "auto_why": "", "auto_latched": False,
-                   "pv_hi_since": None, "pv_lo_since": None,
                    "status": "", "detail": "", "apply": {}})
         MS.update({k: v for k, v in saved.items() if k in MS})
         if MS["mode"] not in MODES:
@@ -822,48 +825,48 @@ def set_op_mode(mode, why):
     return True
 
 
+_SUN = {"next": None}      # when the sun next rises or sets (for the status line)
+
+
+def _sun_up(geo, ts):
+    return _solar_elev_az(geo[0], geo[1], ts)[0] > MODE_CFG["horizon_elev"]
+
+
 def sun_update(now):
-    """Is there sun? Flips MS["phase"] at most once each way per day. Morning -> 'day' once the
-    panels have given pv_on_w for sun_on_s straight (or the sun is dawn_elev° up); evening ->
-    'night' once they've stayed under pv_off_w for sun_off_s while the sun is below dusk_elev°,
-    or it has set. Midday dips are ignored entirely, so a passing cloud can't flip it."""
+    """Day = the sun above the horizon (sunrise -> sunset), from the PV coordinates alone: no
+    panel readings, so clouds or the inverter being off can't move it. Flips MS["phase"]."""
     geo = _load_pv_geo()
     if not geo:
         return
-    c = MODE_CFG
-    el, az = _solar_elev_az(geo[0], geo[1], now)
-    pv = LIVE.get("pv_w") if now - LIVE.get("ts", 0) < 90 else None   # no data (inverter off): no evidence
-    MS["pv_hi_since"] = (MS.get("pv_hi_since") or now) if pv is not None and pv >= c["pv_on_w"] else None
-    MS["pv_lo_since"] = (MS.get("pv_lo_since") or now) if pv is not None and pv < c["pv_off_w"] else None
-    ph, morning = MS.get("phase"), az < 180          # az < 180: solar midnight .. solar noon
-    new = ph
-    if ph is None:
-        new = "day" if el >= c["dusk_elev"] else "night"
-    elif ph != "day" and morning:
-        if el >= c["dawn_elev"] or (MS["pv_hi_since"] and now - MS["pv_hi_since"] >= c["sun_on_s"]):
-            new = "day"
-    elif ph != "night" and not morning:
-        if el <= 0 or (el < c["dusk_elev"] and MS["pv_lo_since"] and now - MS["pv_lo_since"] >= c["sun_off_s"]):
-            new = "night"
+    ph, new = MS.get("phase"), ("day" if _sun_up(geo, now) else "night")
+    if new != ph or not _SUN["next"] or now >= _SUN["next"]:
+        up, _SUN["next"] = new == "day", None
+        for m in range(1, 24 * 60 + 1):              # next sunrise/sunset, to the minute
+            if _sun_up(geo, now + 60 * m) != up:
+                _SUN["next"] = now + 60 * m
+                break
     if new != ph:
         MS["phase"] = new
         if new == "day":                              # a new day starts from the battery as it is
             soc = LIVE.get("soc")
-            MS["auto_latched"] = soc is not None and soc < c["band_low"]
+            MS["auto_latched"] = soc is not None and soc < MODE_CFG["band_low"]
+            MS["auto_since"] = 0                      # ...and the sunrise switch doesn't wait for dwell_s
         if ph is not None:
             _mode_event("sun", phase=new)
         _mode_save()
 
 
 def auto_decide(now, soc):
-    """🤖 Авто: which static set to hold now ('solar' / 'night') and why. No sun -> Ніч. By day
-    the battery carries the flat while SoC ≥ band_low; once below, the grid does and the sun
-    recharges it, until band_high. So the evening starts with the battery in the band."""
+    """🤖 Авто: which static set to hold now ('solar' / 'night') and why. After sunset -> Ніч:
+    the flat on the grid, the battery untouched until sunrise. By day the battery carries the
+    flat while SoC ≥ band_low; once below, the grid does and the sun recharges it, until
+    band_high. So the evening starts with at least band_low in the battery."""
     c = MODE_CFG
+    at = time.strftime(" о %H:%M", time.localtime(_SUN["next"])) if _SUN["next"] else ""
     if MS.get("phase") != "day":
-        return "night", "сонця нема — квартира з мережі, батарея чекає"
+        return "night", "після заходу — квартира з мережі, батарея чекає до сходу" + at
     if soc is None:
-        return MS.get("auto_sub") or "solar", "є сонце; чекаю даних про заряд"
+        return MS.get("auto_sub") or "solar", "день; чекаю даних про заряд"
     if soc < c["band_low"]:
         MS["auto_latched"] = True
     elif soc >= c["band_high"]:
@@ -871,7 +874,8 @@ def auto_decide(now, soc):
     if MS.get("auto_latched"):
         return "night", "бережу батарею: %d%% < %d%% — сонце дозарядить до %d%%, тоді знову батарея" % (
             soc, c["band_low"], c["band_high"])
-    return "solar", "сонце + батарея · батарея працює, поки заряд ≥ %d%% (зараз %d%%)" % (c["band_low"], soc)
+    return "solar", "сонце + батарея до заходу%s · батарея працює, поки заряд ≥ %d%% (зараз %d%%)" % (
+        at, c["band_low"], soc)
 
 
 def _detail(mode):
@@ -905,8 +909,11 @@ def mode_tick(state, state_lock):
     if mode == "auto":
         sub, why = auto_decide(now, LIVE.get("soc"))
         if sub != MS.get("auto_sub"):
-            if MS.get("auto_sub") and now - MS.get("auto_since", 0) < MODE_CFG["dwell_s"]:
-                sub = MS["auto_sub"]           # too soon after the last switch — hold
+            if sub == "solar" and MS.get("auto_sub") and now - MS.get("auto_since", 0) < MODE_CFG["dwell_s"]:
+                sub = MS["auto_sub"]           # back to the battery too soon after the last switch — hold
+                                               # (protecting it, or sunset, never waits)
+                why = "сонце дозарядило батарею — знову працюватиме з %s (пауза між перемиканнями)" % \
+                      time.strftime("%H:%M", time.localtime(MS.get("auto_since", 0) + MODE_CFG["dwell_s"]))
             else:
                 _mode_event("auto", sub=sub, prev=MS.get("auto_sub"), why=why)
                 MS["auto_sub"], MS["auto_since"] = sub, now
