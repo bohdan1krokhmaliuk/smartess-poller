@@ -735,27 +735,32 @@ MODE_CFG = {
     "eve_dead_s": 600,        #    Aug–Sep 2026: ~50 min before sunset, and they'd give ~2 Wh after it
     "sbu_back_v": 52.0,       # ☀ program 13: back to the battery above this. FUL (the default) keeps SBU
                               #   on the grid until the battery is full; the SoC band lives on the Pi
+    "sbu_grid_v": 49.0,       # ☀ program 12: SBU's own "to the grid" point, only a safety net if the Pi
+                              #   stops: 1 V above the 48 V low-DC cut-off, and low enough that even a
+                              #   5.6 kW load can't sag a 70% battery (~53 V) down to it
     "blackout_charge_a": 40,  # 🛡 grid charge current (~2 kW)
     "min_gap_s": 300,         # the controller rewrites a field at most this often...
     "daily_cap": 48,          # ...and makes at most this many writes a day (EEPROM guard)
 }
 _OUT, _CHG, _ACA = "output_source_priority", "charger_source_priority", "max_ac_charging_current"
-_RDV = "battery_redischarge_voltage"
+_RDV, _RCV = "battery_redischarge_voltage", "battery_recharge_voltage"
 OUT_SUB, OUT_SBU = 1, 2
 CHG_SNU, CHG_OSO = 2, 3
 KEY_LABELS = {_OUT: "пріоритет виходу", _CHG: "пріоритет заряду", _ACA: "струм заряду з мережі",
-              _RDV: "повернення на батарею (13)"}
+              _RDV: "повернення на батарею (13)", _RCV: "перехід на мережу (12)"}
 MODES = {
-    "auto":     {"name": "🤖 Авто", "keys": (_OUT, _CHG, _RDV), "set": None,
+    "auto":     {"name": "🤖 Авто", "keys": (_OUT, _CHG, _RDV, _RCV), "set": None,
                  "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за сонцем: від сходу — ☀️; увечері, щойно панелі "
                          "згаснуть (або на заході), — 🌙, квартира тільки з мережі (схід і захід Pi рахує щодня за "
                          "координатами; денні хмарки нічого не перемикають). Вдень батарея живить квартиру, поки "
                          "заряд ≥ 70%; нижче — мережа, а сонце дозаряджає до 80%, і знову батарея."},
-    "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG, _RDV),
-                 "set": {_OUT: OUT_SBU, _CHG: CHG_OSO, _RDV: MODE_CFG["sbu_back_v"]},
+    "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG, _RDV, _RCV),
+                 # written in this order: 13 goes up first, so 12 never ends up above it
+                 "set": {_OUT: OUT_SBU, _CHG: CHG_OSO, _RDV: MODE_CFG["sbu_back_v"], _RCV: MODE_CFG["sbu_grid_v"]},
                  "desc": "SBU: сонце — в квартиру, нестача — з батареї, мережа лише коли батарея сіла. "
-                         "Батарею заряджає тільки сонце. Програма 13 = 52 В, щоб інвертор одразу брав батарею "
-                         "(з FUL він чекає повного заряду)."},
+                         "Батарею заряджає тільки сонце. Програми 12/13 = 49/52 В: на батарею інвертор "
+                         "повертається одразу (з FUL чекав би повного заряду), а на мережу сам іде лише майже "
+                         "порожнім — страховка, якщо Pi зупиниться."},
     "night":    {"name": "🌙 Ніч", "keys": (_OUT, _CHG), "set": {_OUT: OUT_SUB, _CHG: CHG_OSO},
                  "desc": "SUB: квартира з сонця, нестача — з мережі; батарея не розряджається (чекає як ДБЖ) "
                          "і заряджається тільки від сонця."},
@@ -911,7 +916,8 @@ def _detail(mode):
     if mode == "auto":
         sub = MS.get("auto_sub") or "solar"
         return "%s · %s" % (MODES[sub]["name"], MS.get("auto_why", ""))
-    return {"solar": "SBU · заряд тільки від сонця · на батарею з %.0f В" % MODE_CFG["sbu_back_v"],
+    return {"solar": "SBU · заряд тільки від сонця · програми 12/13: %.0f/%.0f В" % (
+                MODE_CFG["sbu_grid_v"], MODE_CFG["sbu_back_v"]),
             "night": "SUB · батарея чекає як ДБЖ · заряд тільки від сонця",
             "blackout": "SUB · заряд від сонця й мережі %d A" % MODE_CFG["blackout_charge_a"]}.get(mode, "")
 
