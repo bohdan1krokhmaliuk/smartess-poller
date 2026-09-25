@@ -729,23 +729,33 @@ MODE_CFG = {
     "horizon_elev": -0.83,    # 🤖 day = the sun above this: sunrise -> sunset as in the weather forecast.
                               #    Waiting for the panels (SW-facing, weak in the morning) left the
                               #    flat on the grid ~1.1 kWh/day with the battery full (backtest)
+    "eve_window_s": 7200,     # 🤖 in the last 2 h before sunset the evening also ends once the panels
+    "pv_dead_w": 20,          #    give under this at a voltage under pv_dead_v (the MPPT floor is ~120 V;
+    "pv_dead_v": 150,         #    a full battery holds them at ~265 V instead) for eve_dead_s straight.
+    "eve_dead_s": 600,        #    Aug–Sep 2026: ~50 min before sunset, and they'd give ~2 Wh after it
+    "sbu_back_v": 52.0,       # ☀ program 13: back to the battery above this. FUL (the default) keeps SBU
+                              #   on the grid until the battery is full; the SoC band lives on the Pi
     "blackout_charge_a": 40,  # 🛡 grid charge current (~2 kW)
     "min_gap_s": 300,         # the controller rewrites a field at most this often...
     "daily_cap": 48,          # ...and makes at most this many writes a day (EEPROM guard)
 }
 _OUT, _CHG, _ACA = "output_source_priority", "charger_source_priority", "max_ac_charging_current"
+_RDV = "battery_redischarge_voltage"
 OUT_SUB, OUT_SBU = 1, 2
 CHG_SNU, CHG_OSO = 2, 3
-KEY_LABELS = {_OUT: "пріоритет виходу", _CHG: "пріоритет заряду", _ACA: "струм заряду з мережі"}
+KEY_LABELS = {_OUT: "пріоритет виходу", _CHG: "пріоритет заряду", _ACA: "струм заряду з мережі",
+              _RDV: "повернення на батарею (13)"}
 MODES = {
-    "auto":     {"name": "🤖 Авто", "keys": (_OUT, _CHG), "set": None,
-                 "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за сонцем: від сходу до заходу — ☀️, після заходу — "
-                         "🌙, квартира тільки з мережі (схід і захід Pi рахує щодня за координатами; хмарки нічого "
-                         "не перемикають). Вдень батарея живить квартиру, поки заряд ≥ 70%; нижче — мережа, а "
-                         "сонце дозаряджає до 80%, і знову батарея."},
-    "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG), "set": {_OUT: OUT_SBU, _CHG: CHG_OSO},
+    "auto":     {"name": "🤖 Авто", "keys": (_OUT, _CHG, _RDV), "set": None,
+                 "desc": "Сам перемикає ☀️ Сонце ⇄ 🌙 Ніч за сонцем: від сходу — ☀️; увечері, щойно панелі "
+                         "згаснуть (або на заході), — 🌙, квартира тільки з мережі (схід і захід Pi рахує щодня за "
+                         "координатами; денні хмарки нічого не перемикають). Вдень батарея живить квартиру, поки "
+                         "заряд ≥ 70%; нижче — мережа, а сонце дозаряджає до 80%, і знову батарея."},
+    "solar":    {"name": "☀️ Сонце", "keys": (_OUT, _CHG, _RDV),
+                 "set": {_OUT: OUT_SBU, _CHG: CHG_OSO, _RDV: MODE_CFG["sbu_back_v"]},
                  "desc": "SBU: сонце — в квартиру, нестача — з батареї, мережа лише коли батарея сіла. "
-                         "Батарею заряджає тільки сонце."},
+                         "Батарею заряджає тільки сонце. Програма 13 = 52 В, щоб інвертор одразу брав батарею "
+                         "(з FUL він чекає повного заряду)."},
     "night":    {"name": "🌙 Ніч", "keys": (_OUT, _CHG), "set": {_OUT: OUT_SUB, _CHG: CHG_OSO},
                  "desc": "SUB: квартира з сонця, нестача — з мережі; батарея не розряджається (чекає як ДБЖ) "
                          "і заряджається тільки від сонця."},
@@ -756,7 +766,7 @@ MODES = {
     "custom":   {"name": "✋ Custom", "keys": (), "set": {},
                  "desc": "Pi нічого не змінює — керуєш сам (сторінка налаштувань, екран інвертора, SmartESS)."},
 }
-LIVE = {}                  # latest QPIGS numbers: ts, soc, pv_w, load_w
+LIVE = {}                  # latest QPIGS numbers: ts, soc, pv_w, pv_v, load_w
 MS = {}                    # persisted mode state, see _mode_load()
 _mode_lock = threading.Lock()
 _mode_wake = threading.Event()
@@ -774,6 +784,7 @@ def _mode_load():
         MS.update({"mode": "custom", "since": int(time.time()), "why": "", "phase": None,
                    "known": {}, "last_write": {}, "day": "", "writes": 0, "force": False,
                    "auto_sub": None, "auto_since": 0, "auto_why": "", "auto_latched": False,
+                   "pv_dead_since": None, "eve_off": "",
                    "status": "", "detail": "", "apply": {}})
         MS.update({k: v for k, v in saved.items() if k in MS})
         if MS["mode"] not in MODES:
@@ -825,7 +836,7 @@ def set_op_mode(mode, why):
     return True
 
 
-_SUN = {"next": None}      # when the sun next rises or sets (for the status line)
+_SUN = {"up": None, "next": None}      # is the sun up, and when it next rises or sets
 
 
 def _sun_up(geo, ts):
@@ -833,37 +844,55 @@ def _sun_up(geo, ts):
 
 
 def sun_update(now):
-    """Day = the sun above the horizon (sunrise -> sunset), from the PV coordinates alone: no
-    panel readings, so clouds or the inverter being off can't move it. Flips MS["phase"]."""
+    """Day starts at sunrise, by the sun's position alone. It ends at sunset, or earlier in the
+    evening (the last eve_window_s) once the panels have gone dead: under pv_dead_w at under
+    pv_dead_v for eve_dead_s straight. Midday clouds can't end it, and a full battery (which
+    holds the panels at ~265 V) doesn't look dead. Flips MS["phase"] once each way per day."""
     geo = _load_pv_geo()
     if not geo:
         return
-    ph, new = MS.get("phase"), ("day" if _sun_up(geo, now) else "night")
-    if new != ph or not _SUN["next"] or now >= _SUN["next"]:
-        up, _SUN["next"] = new == "day", None
+    c = MODE_CFG
+    up = _sun_up(geo, now)
+    if up != _SUN["up"] or not _SUN["next"] or now >= _SUN["next"]:
+        _SUN["up"], _SUN["next"] = up, None
         for m in range(1, 24 * 60 + 1):              # next sunrise/sunset, to the minute
             if _sun_up(geo, now + 60 * m) != up:
                 _SUN["next"] = now + 60 * m
                 break
+    new = "day" if up else "night"
+    if up and _SUN["next"] and _SUN["next"] - now <= c["eve_window_s"]:        # the evening
+        sunset_day = time.strftime("%Y-%m-%d", time.localtime(_SUN["next"]))
+        dead = (now - LIVE.get("ts", 0) < 90 and LIVE.get("pv_w", 1e9) < c["pv_dead_w"]
+                and LIVE.get("pv_v", 1e9) < c["pv_dead_v"])
+        MS["pv_dead_since"] = (MS.get("pv_dead_since") or now) if dead else None
+        if MS["pv_dead_since"] and now - MS["pv_dead_since"] >= c["eve_dead_s"]:
+            MS["eve_off"] = sunset_day                # the panels are done for today: night till sunrise
+        if MS.get("eve_off") == sunset_day:
+            new = "night"
+    else:
+        MS["pv_dead_since"] = None
+    ph = MS.get("phase")
     if new != ph:
         MS["phase"] = new
         if new == "day":                              # a new day starts from the battery as it is
             soc = LIVE.get("soc")
-            MS["auto_latched"] = soc is not None and soc < MODE_CFG["band_low"]
+            MS["auto_latched"] = soc is not None and soc < c["band_low"]
             MS["auto_since"] = 0                      # ...and the sunrise switch doesn't wait for dwell_s
         if ph is not None:
-            _mode_event("sun", phase=new)
+            _mode_event("sun", phase=new, how=("панелі згасли" if new == "night" and up else ""))
         _mode_save()
 
 
 def auto_decide(now, soc):
-    """🤖 Авто: which static set to hold now ('solar' / 'night') and why. After sunset -> Ніч:
-    the flat on the grid, the battery untouched until sunrise. By day the battery carries the
-    flat while SoC ≥ band_low; once below, the grid does and the sun recharges it, until
-    band_high. So the evening starts with at least band_low in the battery."""
+    """🤖 Авто: which static set to hold now ('solar' / 'night') and why. Evening over (panels
+    dead or sunset) -> Ніч: the flat on the grid, the battery untouched until sunrise. By day the
+    battery carries the flat while SoC ≥ band_low; once below, the grid does and the sun
+    recharges it, until band_high. So the evening starts with at least band_low in the battery."""
     c = MODE_CFG
     at = time.strftime(" о %H:%M", time.localtime(_SUN["next"])) if _SUN["next"] else ""
     if MS.get("phase") != "day":
+        if _SUN["up"]:
+            return "night", "панелі згасли — квартира з мережі, батарея чекає до ранку"
         return "night", "після заходу — квартира з мережі, батарея чекає до сходу" + at
     if soc is None:
         return MS.get("auto_sub") or "solar", "день; чекаю даних про заряд"
@@ -874,7 +903,7 @@ def auto_decide(now, soc):
     if MS.get("auto_latched"):
         return "night", "бережу батарею: %d%% < %d%% — сонце дозарядить до %d%%, тоді знову батарея" % (
             soc, c["band_low"], c["band_high"])
-    return "solar", "сонце + батарея до заходу%s · батарея працює, поки заряд ≥ %d%% (зараз %d%%)" % (
+    return "solar", "сонце + батарея, доки світять панелі (захід%s) · батарея працює, поки заряд ≥ %d%% (зараз %d%%)" % (
         at, c["band_low"], soc)
 
 
@@ -882,7 +911,7 @@ def _detail(mode):
     if mode == "auto":
         sub = MS.get("auto_sub") or "solar"
         return "%s · %s" % (MODES[sub]["name"], MS.get("auto_why", ""))
-    return {"solar": "SBU · заряд тільки від сонця",
+    return {"solar": "SBU · заряд тільки від сонця · на батарею з %.0f В" % MODE_CFG["sbu_back_v"],
             "night": "SUB · батарея чекає як ДБЖ · заряд тільки від сонця",
             "blackout": "SUB · заряд від сонця й мережі %d A" % MODE_CFG["blackout_charge_a"]}.get(mode, "")
 
@@ -1201,6 +1230,7 @@ def publish_qpigs(mc, topic, text):
     if isinstance(data.get("battery_capacity"), (int, float)):
         LIVE.update(ts=time.time(), soc=data["battery_capacity"],        # what the mode controller acts on
                     pv_w=float(data.get("pv_input_voltage", 0) or 0) * float(data.get("pv_input_current", 0) or 0),
+                    pv_v=float(data.get("pv_input_voltage", 0) or 0),
                     load_w=float(data.get("ac_output_active_power", 0) or 0))
 
     # energy accounting: integrate the per-source power into Wh counters
